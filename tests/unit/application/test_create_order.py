@@ -28,6 +28,12 @@ class InMemoryProductRepository(ProductRepository):
     def update_stock(self, product: Product) -> None:
         self._products[product.id] = product
 
+    def save(self, product: Product) -> Product:
+        new_id = max(self._products, default=0) + 1
+        saved = replace(product, id=new_id)
+        self._products[new_id] = saved
+        return saved
+
 
 class InMemoryOrderRepository(OrderRepository):
     def __init__(self) -> None:

@@ -20,9 +20,12 @@ from orderhub.adapters.outbound.persistence.sqlite.sqlite_user_repository import
 from orderhub.adapters.outbound.security.bcrypt_password_hasher import (
     BcryptPasswordHasher,
 )
+from orderhub.adapters.outbound.security.jwt_token_service import JWTTokenService
 from orderhub.application.use_cases.authenticate_user import AuthenticateUser
 from orderhub.application.use_cases.create_order import CreateOrder
+from orderhub.application.use_cases.create_product import CreateProduct
 from orderhub.application.use_cases.list_orders import ListOrders
+from orderhub import settings
 
 
 class Container:
@@ -33,12 +36,20 @@ class Container:
         self.order_repository = SQLiteOrderRepository(connection_factory)
         self.user_repository = SQLiteUserRepository(connection_factory)
         self.password_hasher = BcryptPasswordHasher()
+        self.token_service = JWTTokenService(
+            secret_key=settings.JWT_SECRET_KEY,
+            expiration_minutes=settings.JWT_EXPIRATION_MINUTES,
+            algorithm=settings.JWT_ALGORITHM,
+        )
 
         self.create_order = CreateOrder(
             product_repository=self.product_repository,
             order_repository=self.order_repository,
         )
         self.list_orders = ListOrders(order_repository=self.order_repository)
+        self.create_product = CreateProduct(
+            product_repository=self.product_repository,
+        )
         self.authenticate_user = AuthenticateUser(
             user_repository=self.user_repository,
             password_hasher=self.password_hasher,

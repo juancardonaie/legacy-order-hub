@@ -1,6 +1,7 @@
 from dataclasses import asdict
+from typing import Callable
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, g, jsonify, request
 
 from orderhub.application.use_cases.create_order import CreateOrder
 from orderhub.application.use_cases.list_orders import ListOrders
@@ -14,21 +15,29 @@ from orderhub.domain.exceptions import (
 def create_order_blueprint(
     create_order: CreateOrder,
     list_orders: ListOrders,
+    jwt_required: Callable,
 ) -> Blueprint:
     """Adaptador primario HTTP.
 
     Traduce la petición al caso de uso y las excepciones de dominio al código
     HTTP correspondiente. No contiene reglas de negocio ni acceso a datos.
     Las rutas se mantienen iguales a las del sistema legado.
+
+    Ambos endpoints exigen token válido. Crear una orden es comprar: basta con
+    estar autenticado, NO se exige rol admin (eso aplica al catálogo, RF-01.4).
     """
     blueprint = Blueprint("orders", __name__)
 
     @blueprint.route("/create_order", methods=["POST"])
+    @jwt_required
     def create_order_endpoint():
         data = request.get_json(silent=True) or {}
         try:
             order = create_order.execute(
-                user_id=data.get("user_id"),
+                # El user_id se toma de la identidad del token, NO del body:
+                # el body lo controla el cliente y permitiría crear órdenes a
+                # nombre de otro usuario.
+                user_id=g.current_user.user_id,
                 product_id=data.get("product_id"),
                 quantity=int(data.get("quantity", 1)),
             )
@@ -58,6 +67,7 @@ def create_order_blueprint(
         )
 
     @blueprint.route("/get_all_orders_legacy", methods=["GET"])
+    @jwt_required
     def list_orders_endpoint():
         orders = list_orders.execute()
         return jsonify([asdict(order) for order in orders]), 200

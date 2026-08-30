@@ -1,4 +1,5 @@
 import sqlite3
+from dataclasses import replace
 from typing import Callable, Optional
 
 from orderhub.application.ports.product_repository import ProductRepository
@@ -36,6 +37,20 @@ class SQLiteProductRepository(ProductRepository):
             connection.commit()
         finally:
             connection.close()
+
+    def save(self, product: Product) -> Product:
+        connection = self._connection_factory()
+        try:
+            cursor = connection.execute(
+                "INSERT INTO products (name, price, stock) VALUES (?, ?, ?)",
+                (product.name, product.price, product.stock),
+            )
+            connection.commit()
+            new_id = cursor.lastrowid
+        finally:
+            connection.close()
+
+        return replace(product, id=new_id)
 
     @staticmethod
     def _to_entity(row: sqlite3.Row) -> Product:

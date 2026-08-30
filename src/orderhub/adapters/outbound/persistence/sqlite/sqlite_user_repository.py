@@ -19,7 +19,8 @@ class SQLiteUserRepository(UserRepository):
         connection = self._connection_factory()
         try:
             row = connection.execute(
-                "SELECT id, username, password_hash, role FROM users WHERE username = ?",
+                "SELECT id, username, password_hash, role FROM users "
+                "WHERE username = ?",
                 (username,),
             ).fetchone()
         finally:
