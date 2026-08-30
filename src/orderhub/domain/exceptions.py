@@ -32,3 +32,21 @@ class InvalidQuantityError(DomainError):
 class InvalidCredentialsError(DomainError):
     def __init__(self):
         super().__init__("Credenciales inválidas")
+
+
+class InvalidProductNameError(DomainError):
+    def __init__(self, name):
+        super().__init__("El nombre del producto no puede estar vacío")
+        self.name = name
+
+
+class InvalidProductPriceError(DomainError):
+    def __init__(self, price):
+        super().__init__("El precio debe ser mayor que cero")
+        self.price = price
+
+
+class InvalidStockError(DomainError):
+    def __init__(self, stock):
+        super().__init__("El stock no puede ser negativo")
+        self.stock = stock

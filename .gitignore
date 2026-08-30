@@ -4,3 +4,7 @@ orderhub.db
 __pycache__
 /__pycache__
 .venv/
+
+# Artefactos de pruebas y cobertura (regenerables)
+.coverage
+.pytest_cache/

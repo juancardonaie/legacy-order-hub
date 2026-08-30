@@ -18,3 +18,7 @@ class ProductRepository(ABC):
     @abstractmethod
     def update_stock(self, product: Product) -> None:
         """Persiste el stock actual de la entidad."""
+
+    @abstractmethod
+    def save(self, product: Product) -> Product:
+        """Persiste un producto nuevo y lo devuelve con su id asignado."""
