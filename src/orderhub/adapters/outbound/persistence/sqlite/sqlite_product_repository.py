@@ -1,6 +1,6 @@
 import sqlite3
 from dataclasses import replace
-from typing import Callable, Optional
+from typing import Callable, List, Optional
 
 from orderhub.application.ports.product_repository import ProductRepository
 from orderhub.domain.entities.product import Product
@@ -26,6 +26,18 @@ class SQLiteProductRepository(ProductRepository):
             connection.close()
 
         return self._to_entity(row) if row is not None else None
+
+    def find_all(self) -> List[Product]:
+        """Catálogo completo, ordenado por id para que la salida sea estable."""
+        connection = self._connection_factory()
+        try:
+            rows = connection.execute(
+                "SELECT id, name, price, stock FROM products ORDER BY id"
+            ).fetchall()
+        finally:
+            connection.close()
+
+        return [self._to_entity(row) for row in rows]
 
     def update_stock(self, product: Product) -> None:
         connection = self._connection_factory()

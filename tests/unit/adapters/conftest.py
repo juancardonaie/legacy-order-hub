@@ -25,6 +25,7 @@ from orderhub.application.ports.product_repository import ProductRepository
 from orderhub.application.use_cases.create_order import CreateOrder
 from orderhub.application.use_cases.create_product import CreateProduct
 from orderhub.application.use_cases.list_orders import ListOrders
+from orderhub.application.use_cases.list_products import ListProducts
 from orderhub.domain.entities.order import Order
 from orderhub.domain.entities.product import Product
 
@@ -35,6 +36,9 @@ class InMemoryProductRepository(ProductRepository):
 
     def find_by_id(self, product_id: int) -> Optional[Product]:
         return self.products.get(product_id)
+
+    def find_all(self) -> List[Product]:
+        return [self.products[key] for key in sorted(self.products)]
 
     def update_stock(self, product: Product) -> None:
         self.products[product.id] = product
@@ -96,6 +100,7 @@ def client(product_repository, order_repository, token_service):
     app.register_blueprint(
         create_product_blueprint(
             create_product=CreateProduct(product_repository=product_repository),
+            list_products=ListProducts(product_repository=product_repository),
             jwt_required=jwt_required,
         )
     )

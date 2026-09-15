@@ -1,10 +1,26 @@
+import os
 import sqlite3
 
 import bcrypt
 
+DEFAULT_DATABASE_PATH = "orderhub.db"
 
-def get_db_connection():
-    conn = sqlite3.connect("orderhub.db")
+
+def _resolve_database_path(database_path=None):
+    """Ruta del fichero SQLite: argumento > entorno > valor por defecto.
+
+    Se lee de `os.environ` en vez de importar `orderhub.settings` porque
+    `app.py` importa este módulo antes de añadir `src/` al sys.path. El valor
+    efectivo lo decide igualmente `settings.DATABASE_PATH`, que es quien lo
+    pasa explícitamente desde el arranque.
+    """
+    if database_path is not None:
+        return database_path
+    return os.environ.get("DATABASE_PATH", DEFAULT_DATABASE_PATH)
+
+
+def get_db_connection(database_path=None):
+    conn = sqlite3.connect(_resolve_database_path(database_path))
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -66,8 +82,8 @@ def _backfill_password_hashes(conn):
         conn.commit()
 
 
-def init_db():
-    conn = get_db_connection()
+def init_db(database_path=None):
+    conn = get_db_connection(database_path)
     cursor = conn.cursor()
 
     cursor.execute(

@@ -2,8 +2,8 @@
 
 > **Asignatura:** Actualización y Mantenimiento de Software
 > **Punto de partida:** Producción Legada (v1.0.0-legacy) — *Alta Deuda Técnica*
-> **Estado actual:** Arquitectura Hexagonal · Autenticación JWT · 125 tests
-> **Cobertura de pruebas:** **100 %** en `src/orderhub/` · **86 %** del código fuente del proyecto
+> **Estado actual:** Arquitectura Hexagonal · Autenticación JWT · Catálogo e inventario · 251 tests
+> **Cobertura de pruebas:** **100 %** en `src/orderhub/` · **95 %** del proyecto completo
 
 ---
 
@@ -55,8 +55,8 @@ Evolucionar y modernizar la aplicación **Legacy OrderHub** desde su estado mono
 | :--- | :--- | :--- | :--- |
 | **Lenguaje / Framework** | Python / Flask Monolítico | ✅ Python 3.9 / Flask 3.1 + Arquitectura Hexagonal | Python 3.11+ / Flask o FastAPI modular |
 | **Base de Datos** | SQLite (SQL concatenado) | 🟡 SQLite con consultas parametrizadas y repositorios | PostgreSQL + ORM (SQLAlchemy / Alembic) |
-| **Seguridad** | Secretos *hardcoded*, contraseñas en claro | 🟡 Bcrypt + JWT con expiración + roles; `config.py` aún con secretos | `.env` / Vault, Hash Bcrypt/Argon2, JWT |
-| **Pruebas** | Ninguna (0 % coverage) | ✅ Pytest — 125 tests, 100 % en `src/orderhub/` | Pytest + Cobertura > 80 % + Mocks de IA |
+| **Seguridad** | Secretos *hardcoded*, contraseñas en claro | ✅ Bcrypt + JWT con expiración + roles + configuración desde `.env` (sin secretos en código) | `.env` / Vault, Hash Bcrypt/Argon2, JWT |
+| **Pruebas** | Ninguna (0 % coverage) | ✅ Pytest — 251 tests, 100 % en `src/orderhub/` | Pytest + Cobertura > 80 % + Mocks de IA |
 | **Calidad de código** | Sin linters | ✅ `flake8` + `black` limpios en `src/` y `tests/` | Linters + SAST en CI |
 | **Infraestructura** | Ejecución local/servidor directo | ❌ Sin cambios | Docker Compose + Kubernetes (Minikube/k3s) |
 | **CI / CD** | Despliegue manual | ❌ Sin cambios | GitHub Actions / GitLab CI + SonarQube |
@@ -76,7 +76,7 @@ Estas eran las áreas críticas detectadas en la auditoría inicial (HU-01). El 
 | **Contraseñas en texto plano.** | ✅ **Resuelto.** Verificación con `bcrypt.checkpw` a través del puerto `PasswordHasher`. |
 | **Sin sesión ni control de acceso** — cualquiera podía invocar cualquier endpoint. | ✅ **Resuelto.** JWT firmado con expiración obligatoria + autorización por rol. |
 | **Código acoplado (*spaghetti*)** — `/create_order` mezclaba HTTP, cálculo de negocio y SQL en una sola función. | ✅ **Resuelto.** Separado en controlador HTTP → caso de uso → repositorio. |
-| **Credenciales de BD expuestas en `config.py`.** | 🔴 **Abierto.** Ver [DT-01](docs/TECHNICAL_DEBT_LOG.md). El patrón correcto ya existe en `src/orderhub/settings.py`, que lee del entorno. |
+| **Credenciales de BD expuestas en `config.py`.** | ✅ **Resuelto.** `config.py` fue eliminado; toda la configuración se lee del entorno en `src/orderhub/settings.py`, alimentado por un `.env` que no se versiona. Ver [DT-01](docs/TECHNICAL_DEBT_LOG.md). |
 | **Falta de atomicidad transaccional** — el guardado de la orden y el descuento de stock ocurren en transacciones separadas. | 🔴 **Abierto.** Si falla el descuento de stock, la orden queda registrada igualmente (RF-03.3). Ver [DT-13](docs/TECHNICAL_DEBT_LOG.md#dt-13--createorder-no-es-atómico-dos-transacciones-separadas). |
 | **Configuración rígida** — `debug=True` y puerto fijo en el código. | 🔴 **Abierto.** `app.py` sigue con `debug=True` y `port=5001` cableados. |
 
@@ -90,9 +90,10 @@ Estas eran las áreas críticas detectadas en la auditoría inicial (HU-01). El 
 | `POST` | `/login` | ❌ **Público** | — | Valida credenciales y **devuelve un JWT** |
 | `POST` | `/create_order` | ✅ Token requerido | Cualquiera autenticado | Crea una orden y descuenta stock |
 | `GET` | `/get_all_orders_legacy` | ✅ Token requerido | Cualquiera autenticado | Lista todas las órdenes |
+| `GET` | `/products` | ✅ Token requerido | Cualquiera autenticado | Lista el catálogo con precio y **stock actual** (RF-02.1) |
 | `POST` | `/products` | ✅ Token requerido | **`admin`** | Da de alta un producto en el catálogo |
 
-Códigos de error relevantes: **401** si falta el token, está expirado o la firma no es válida; **403** si el token es válido pero el rol no basta.
+Códigos de error relevantes: **401** si falta el token, está expirado o la firma no es válida; **403** si el token es válido pero el rol no basta; **404** si el producto no existe; **400** si el stock solicitado supera el disponible (RF-02.3).
 
 > ⚠️ El panel HTML (`GET /`) carga correctamente, pero su botón «Cargar Órdenes» no envía la cabecera `Authorization` y por tanto recibe un `401`. Es una limitación conocida y documentada: ver [DT-05](docs/TECHNICAL_DEBT_LOG.md).
 
@@ -136,13 +137,38 @@ curl -X POST http://localhost:5001/products \
   -d '{"name":"Teclado mecánico","price":99.99,"stock":10}'
 ```
 
-**4. Crear una orden** (cualquier usuario autenticado). El dueño de la orden se toma **del token**, no del cuerpo de la petición:
+**4. Consultar el catálogo** (cualquier usuario autenticado). Devuelve precio y **stock actual** de cada producto:
+
+```bash
+curl http://localhost:5001/products \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+```json
+[
+  { "id": 1, "name": "Laptop Legada", "price": 1200.0, "stock": 5 },
+  { "id": 2, "name": "Mouse USB", "price": 15.5, "stock": 50 }
+]
+```
+
+**5. Crear una orden** (cualquier usuario autenticado). El dueño de la orden se toma **del token**, no del cuerpo de la petición:
 
 ```bash
 curl -X POST http://localhost:5001/create_order \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $TOKEN" \
   -d '{"product_id":1,"quantity":2}'
+```
+
+Si el stock solicitado supera el disponible, la respuesta es un **400** con el detalle del rechazo (RF-02.3), no una excepción:
+
+```json
+{
+  "error": "Stock insuficiente",
+  "product_id": 1,
+  "requested": 99,
+  "available": 5
+}
 ```
 
 El token caduca a los **60 minutos** por defecto. Es configurable mediante variables de entorno (`JWT_SECRET_KEY`, `JWT_ALGORITHM`, `JWT_EXPIRATION_MINUTES`); ver `src/orderhub/settings.py`.
@@ -179,7 +205,19 @@ En Windows: `.venv\Scripts\activate`
 pip install -r requirements.txt
 ```
 
-**4. Arrancar la aplicación:**
+**4. Configurar el entorno** (RNF-02.1 — el proyecto no lleva ningún secreto en el código):
+
+```bash
+cp .env.example .env
+```
+
+`.env` está en `.gitignore` y **nunca debe subirse al repositorio**. En desarrollo puede dejarse tal cual: con `APP_ENV=development` la aplicación arranca usando respaldos marcados como inseguros. Fuera de desarrollo es obligatorio rellenar `JWT_SECRET_KEY` y `FLASK_SECRET_KEY`, o el arranque falla con un error explícito:
+
+```bash
+python -c "import secrets; print(secrets.token_urlsafe(48))"
+```
+
+**5. Arrancar la aplicación:**
 
 ```bash
 python app.py
@@ -209,7 +247,9 @@ Con reporte de cobertura:
 pytest --cov=orderhub --cov-report=term-missing
 ```
 
-La suite tiene **125 tests** organizados por capa: `tests/unit/domain/`, `tests/unit/application/`, `tests/unit/adapters/` y `tests/integration/`. Los tests de integración usan Flask y SQLite reales, cada uno contra una base temporal aislada — nunca tocan `orderhub.db`.
+La suite tiene **251 tests** organizados por capa: `tests/unit/domain/`, `tests/unit/application/`, `tests/unit/adapters/`, `tests/unit/security/` y `tests/integration/`. Los tests de integración usan Flask y SQLite reales, cada uno contra una base temporal aislada — nunca tocan `orderhub.db`.
+
+`tests/unit/security/` contiene dos **guardas estáticas** que analizan el propio repositorio en cada ejecución: una falla si alguna consulta SQL se construye por concatenación en lugar de con parámetros (RNF-02.2), y la otra si reaparece un secreto en el código fuente o si `.env` deja de estar ignorado (RNF-02.1).
 
 ### Ejecutar los linters
 
@@ -220,7 +260,7 @@ black --check src/orderhub/ tests/
 
 Ambos deben salir sin ningún hallazgo. La configuración de `flake8` (longitud máxima de línea: 88, compatible con `black`) está en [`setup.cfg`](setup.cfg).
 
-> Sobre los archivos legados de la raíz: `flake8 app.py config.py database.py` reporta **5 hallazgos `E402`** (imports no situados al inicio). Son estructurales — `app.py` debe insertar `src/` en `sys.path` antes de importar `orderhub`, porque el proyecto aún no está empaquetado. Se dejan visibles a propósito en lugar de silenciarlos con `# noqa`. Ver [DT-08](docs/TECHNICAL_DEBT_LOG.md).
+> Sobre los archivos legados de la raíz: `flake8 app.py database.py` reporta **6 hallazgos `E402`** (imports no situados al inicio). Son estructurales — `app.py` debe insertar `src/` en `sys.path` antes de importar `orderhub`, porque el proyecto aún no está empaquetado. Se dejan visibles a propósito en lugar de silenciarlos con `# noqa`. Ver [DT-08](docs/TECHNICAL_DEBT_LOG.md).
 
 ---
 

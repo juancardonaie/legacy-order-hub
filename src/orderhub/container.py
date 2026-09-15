@@ -25,6 +25,7 @@ from orderhub.application.use_cases.authenticate_user import AuthenticateUser
 from orderhub.application.use_cases.create_order import CreateOrder
 from orderhub.application.use_cases.create_product import CreateProduct
 from orderhub.application.use_cases.list_orders import ListOrders
+from orderhub.application.use_cases.list_products import ListProducts
 from orderhub import settings
 
 
@@ -48,6 +49,9 @@ class Container:
         )
         self.list_orders = ListOrders(order_repository=self.order_repository)
         self.create_product = CreateProduct(
+            product_repository=self.product_repository,
+        )
+        self.list_products = ListProducts(
             product_repository=self.product_repository,
         )
         self.authenticate_user = AuthenticateUser(

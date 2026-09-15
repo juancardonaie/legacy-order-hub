@@ -45,7 +45,22 @@ def create_order_blueprint(
             return jsonify({"error": "Cantidad inválida"}), 400
         except ProductNotFoundError as error:
             return jsonify({"error": str(error)}), 404
-        except (InsufficientStockError, InvalidQuantityError) as error:
+        except InsufficientStockError as error:
+            # RF-02.3: el rechazo por stock es un error de negocio esperado,
+            # no una excepción cruda. Se devuelve 400 con el detalle que el
+            # cliente necesita para corregir la petición.
+            return (
+                jsonify(
+                    {
+                        "error": str(error),
+                        "product_id": error.product_id,
+                        "requested": error.requested,
+                        "available": error.available,
+                    }
+                ),
+                400,
+            )
+        except InvalidQuantityError as error:
             return jsonify({"error": str(error)}), 400
 
         # TODO: reemplazar por NotifierPort cuando se implemente RF-04.1.

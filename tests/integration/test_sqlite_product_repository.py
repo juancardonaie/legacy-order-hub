@@ -68,3 +68,33 @@ def test_el_sql_parametrizado_acepta_comillas_simples_en_el_nombre(repository):
 def test_los_cambios_de_un_test_no_se_ven_en_otro(repository):
     """La BD se recrea por test: solo están los 2 productos sembrados."""
     assert repository.find_by_id(3) is None
+
+
+def test_find_all_devuelve_el_catalogo_sembrado_ordenado_por_id(repository):
+    catalogo = repository.find_all()
+
+    assert catalogo == [
+        Product(id=1, name="Laptop Legada", price=1200.00, stock=5),
+        Product(id=2, name="Mouse USB", price=15.50, stock=50),
+    ]
+
+
+def test_find_all_incluye_los_productos_recien_guardados(repository):
+    repository.save(Product.create(name="Teclado", price=99.99, stock=7))
+
+    assert [p.name for p in repository.find_all()][-1] == "Teclado"
+
+
+def test_find_all_refleja_el_stock_actualizado(repository):
+    producto = repository.find_by_id(1)
+    producto.decrease_stock(4)
+    repository.update_stock(producto)
+
+    assert repository.find_all()[0].stock == 1
+
+
+def test_find_all_sobre_un_catalogo_vacio_devuelve_lista_vacia(repository, connection):
+    connection.execute("DELETE FROM products")
+    connection.commit()
+
+    assert repository.find_all() == []
