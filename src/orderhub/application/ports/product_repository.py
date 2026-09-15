@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import Optional
+from typing import List, Optional
 
 from orderhub.domain.entities.product import Product
 
@@ -14,6 +14,10 @@ class ProductRepository(ABC):
     @abstractmethod
     def find_by_id(self, product_id: int) -> Optional[Product]:
         """Devuelve el producto o None si no existe."""
+
+    @abstractmethod
+    def find_all(self) -> List[Product]:
+        """Devuelve todos los productos del catálogo (RF-02.1)."""
 
     @abstractmethod
     def update_stock(self, product: Product) -> None:

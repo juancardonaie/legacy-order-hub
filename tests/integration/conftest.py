@@ -165,6 +165,7 @@ def integration_app(container) -> Flask:
     app.register_blueprint(
         create_product_blueprint(
             create_product=container.create_product,
+            list_products=container.list_products,
             jwt_required=jwt_required,
         )
     )

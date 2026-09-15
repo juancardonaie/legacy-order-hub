@@ -5,7 +5,7 @@ delega las reglas de negocio en el dominio y persiste por el puerto.
 """
 
 from dataclasses import replace
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 import pytest
 
@@ -26,6 +26,9 @@ class InMemoryProductRepository(ProductRepository):
 
     def find_by_id(self, product_id: int) -> Optional[Product]:
         return self.products.get(product_id)
+
+    def find_all(self) -> List[Product]:
+        return [self.products[key] for key in sorted(self.products)]
 
     def update_stock(self, product: Product) -> None:
         self.products[product.id] = product

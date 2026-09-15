@@ -25,6 +25,9 @@ class InMemoryProductRepository(ProductRepository):
     def find_by_id(self, product_id: int) -> Optional[Product]:
         return self._products.get(product_id)
 
+    def find_all(self) -> List[Product]:
+        return [self._products[key] for key in sorted(self._products)]
+
     def update_stock(self, product: Product) -> None:
         self._products[product.id] = product
 

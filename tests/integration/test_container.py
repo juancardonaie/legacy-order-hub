@@ -14,6 +14,7 @@ from orderhub.application.use_cases.authenticate_user import AuthenticateUser
 from orderhub.application.use_cases.create_order import CreateOrder
 from orderhub.application.use_cases.create_product import CreateProduct
 from orderhub.application.use_cases.list_orders import ListOrders
+from orderhub.application.use_cases.list_products import ListProducts
 from orderhub.container import Container
 
 
@@ -70,3 +71,20 @@ def test_construir_el_container_no_abre_la_base_de_datos(tmp_path):
     Container(database_path=str(inexistente))
 
     assert not inexistente.exists()
+
+
+def test_construye_el_caso_de_uso_de_catalogo(container):
+    assert isinstance(container.list_products, ListProducts)
+
+
+def test_list_products_lee_el_catalogo_real(container):
+    assert [p.name for p in container.list_products.execute()] == [
+        "Laptop Legada",
+        "Mouse USB",
+    ]
+
+
+def test_list_products_y_create_product_comparten_repositorio(container):
+    container.create_product.execute(name="Webcam", price=45.0, stock=3)
+
+    assert "Webcam" in [p.name for p in container.list_products.execute()]

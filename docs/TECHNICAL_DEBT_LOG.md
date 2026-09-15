@@ -31,8 +31,8 @@ de:
 
 | # | Deuda | Estado | Requisito |
 | :--- | :--- | :--- | :--- |
-| [DT-01](#dt-01--secretos-hardcodeados-en-configpy) | Secretos hardcodeados en `config.py` | 🔴 Abierta | RNF-02.1 |
-| [DT-02](#dt-02--valor-por-defecto-inseguro-de-jwt_secret_key) | Default inseguro de `JWT_SECRET_KEY` | 🔴 Abierta | RNF-02.1 |
+| [DT-01](#dt-01--secretos-hardcodeados-en-configpy-resuelta) | Secretos hardcodeados en `config.py` | ✅ Resuelta | RNF-02.1 |
+| [DT-02](#dt-02--valor-por-defecto-inseguro-de-jwt_secret_key-resuelta) | Default inseguro de `JWT_SECRET_KEY` | ✅ Resuelta | RNF-02.1 |
 | [DT-03](#dt-03--columna-password-en-texto-plano-en-el-esquema) | Columna `password` en texto plano | 🟡 Diferida | RF-01.2 |
 | [DT-04](#dt-04--comentario-desactualizado-en-databasepy-resuelta) | Comentario desactualizado en `database.py` | ✅ Resuelta | RNF-01.3 |
 | [DT-05](#dt-05--el-panel-html-no-envía-el-token) | Panel HTML roto tras exigir token | 🟡 Diferida | RF-01.3 |
@@ -44,70 +44,117 @@ de:
 | [DT-11](#dt-11--inyección-sql-en-login-resuelta) | Inyección SQL en `/login` | ✅ Resuelta | RNF-02.2 |
 | [DT-12](#dt-12--contraseñas-en-texto-plano-resuelta) | Contraseñas en texto plano | ✅ Resuelta | RF-01.2 |
 | [DT-13](#dt-13--createorder-no-es-atómico-dos-transacciones-separadas) | `CreateOrder` no es atómico | 🔴 Abierta | RF-03.3 |
+| [DT-14](#dt-14--el-catálogo-no-distingue-productos-sin-stock-ni-pagina) | `GET /products` sin filtro ni paginación | 🔴 Abierta | RF-02.1 |
+| [DT-15](#dt-15--databasepy-siembra-datos-de-prueba-en-cualquier-entorno) | `init_db()` siembra datos de prueba siempre | 🔴 Abierta | RNF-02.1 |
 
 ---
 
-## DT-01 — Secretos hardcodeados en `config.py`
+## DT-01 — Secretos hardcodeados en `config.py` (RESUELTA)
 
-**Estado:** 🔴 Abierta · **Requisito:** RNF-02.1 (*Zero Hardcoded Secrets*) · **Severidad:** Alta
+**Estado:** ✅ Resuelta · **Requisito:** RNF-02.1 (*Zero Hardcoded Secrets*) · **Severidad:** Alta
 
-**Qué es.** El módulo de configuración legado define credenciales y una clave
-secreta como literales en el código fuente.
-
-**Dónde está.** [`config.py:3-7`](../config.py) — `DB_HOST`, `DB_USER`,
-`DB_PASS`, `DB_NAME` y `SECRET_KEY`. La única de esas variables que se consume
-es `SECRET_KEY`, leída en [`app.py:21`](../app.py). Las cuatro de base de datos
-no se referencian en ningún punto del proyecto (verificado por búsqueda: solo
-aparecen en su propia definición); apuntan a un motor de base de datos que el
+**Qué era.** El módulo de configuración legado definía credenciales y una clave
+secreta como literales en el código fuente: `config.py` declaraba `DB_HOST`,
+`DB_USER`, `DB_PASS`, `DB_NAME` y `SECRET_KEY`. La única consumida era
+`SECRET_KEY`, leída desde `app.py`; las cuatro de base de datos no se
+referenciaban en ningún punto del proyecto y apuntaban a un motor que el
 sistema ni siquiera usa, porque la persistencia real es SQLite.
 
-**Por qué es deuda.** Un secreto en el código fuente queda registrado en el
-historial de Git para siempre, se replica en cada clon del repositorio y no se
-puede rotar sin un nuevo despliegue. Además impide tener valores distintos por
-entorno (desarrollo, pruebas, producción) sin modificar el código.
-
-**Qué riesgo implica.** Cualquiera con acceso de lectura al repositorio —
-incluido el historial— obtiene la `SECRET_KEY` de Flask. Rotarla exige un
+**Qué riesgo implicaba.** Cualquiera con acceso de lectura al repositorio
+—incluido el historial— obtenía la `SECRET_KEY` de Flask. Rotarla exigía un
 commit y un despliegue, no un cambio de configuración.
 
-**Cuál sería la solución.** Ya existe en el proyecto el patrón correcto a
-seguir: [`src/orderhub/settings.py`](../src/orderhub/settings.py) lee toda su
-configuración del entorno con `os.environ.get` (líneas 18, 20 y 26) y no
-contiene ningún secreto literal. La corrección es migrar `config.py` a ese
-mismo esquema, cargar los valores desde un archivo `.env` excluido del control
-de versiones, y eliminar las cuatro variables de base de datos que no se usan.
+**Cómo se resolvió.** Se eliminó `config.py` por completo y su única variable
+viva se migró al patrón que el proyecto ya aplicaba en
+[`src/orderhub/settings.py`](../src/orderhub/settings.py), que ahora es la
+**única fuente de configuración** del sistema:
 
-> Contraste directo: `settings.py` es cómo debe verse la configuración;
-> `config.py` es cómo no debe verse. Conviven a propósito hasta que se complete
-> la migración.
+| Antes (`config.py`) | Ahora (`settings.py`) |
+| :--- | :--- |
+| `SECRET_KEY = "clave_secreta_super_insegura_123"` | `FLASK_SECRET_KEY` leída de `os.environ` |
+| `DB_HOST`, `DB_USER`, `DB_PASS`, `DB_NAME` | Eliminadas: no se usaban y apuntaban a un motor inexistente |
+| — | `DATABASE_PATH`, antes cableada como literal en `app.py` |
+
+Cambios concretos:
+
+1. **`config.py` eliminado.** [`app.py`](../app.py) ya no lo importa: lee
+   `settings.FLASK_SECRET_KEY` y `settings.DATABASE_PATH`.
+2. **Carga de `.env`.** `settings.py` llama a `load_dotenv()` (dependencia
+   `python-dotenv`, añadida a `requirements.txt`). Se usa `override=False`
+   —el valor por defecto— para que en producción mande el entorno real del
+   contenedor y no un `.env` olvidado en la imagen.
+3. **`.env.example` versionado y `.env` ignorado.** La plantilla documenta
+   todas las variables **sin ningún valor real**; `.gitignore` excluye `.env`
+   y `.env.*`, con la excepción explícita `!.env.example`.
+4. **`database.py` también parametrizado.** `get_db_connection()` e
+   `init_db()` aceptan la ruta de la BD y, en su ausencia, la leen de
+   `DATABASE_PATH`; ya no tienen `"orderhub.db"` cableado como único destino
+   posible.
+
+**Cómo se verifica que no vuelve.** No basta con la revisión manual: la suite
+incluye una guarda automática en
+[`tests/unit/security/test_no_hardcoded_secrets.py`](../tests/unit/security/test_no_hardcoded_secrets.py)
+que falla si `config.py` reaparece, si alguno de los literales legados vuelve a
+figurar en cualquier archivo fuente, si `.env.example` se rellena con valores
+o si `.gitignore` deja de excluir `.env`.
+
+**Deuda residual.** El historial de Git conserva los secretos de los commits
+anteriores; están ya rotados de facto (las claves de desarrollo actuales son
+otras), pero el valor antiguo sigue siendo recuperable del historial. Reescribir
+el historial no se aborda aquí por ser una operación destructiva sobre una rama
+compartida.
 
 ---
 
-## DT-02 — Valor por defecto inseguro de `JWT_SECRET_KEY`
+## DT-02 — Valor por defecto inseguro de `JWT_SECRET_KEY` (RESUELTA)
 
-**Estado:** 🔴 Abierta · **Requisito:** RNF-02.1 · **Severidad:** Alta en despliegue, nula en desarrollo
+**Estado:** ✅ Resuelta · **Requisito:** RNF-02.1 · **Severidad:** Alta en despliegue, nula en desarrollo
 
-**Qué es.** La clave de firma de los JWT cae silenciosamente a un valor
-constante conocido si la variable de entorno no está definida.
+**Qué era.** La clave de firma de los JWT caía **silenciosamente** a un valor
+constante conocido (`dev-only-insecure-jwt-secret-change-me`, presente en este
+repositorio) si la variable de entorno no estaba definida. El respaldo era una
+decisión deliberada para que el proyecto arrancase sin configuración previa,
+pero el fallo no distinguía «estoy en desarrollo» de «me desplegaron sin
+configurar».
 
-**Dónde está.** [`src/orderhub/settings.py:16-18`](../src/orderhub/settings.py) —
-`DEFAULT_DEV_JWT_SECRET = "dev-only-insecure-jwt-secret-change-me"`, usado como
-respaldo de `os.environ.get("JWT_SECRET_KEY", ...)`.
+**Qué riesgo implicaba.** Un despliegue sin `JWT_SECRET_KEY` firmaba los tokens
+con una clave pública: cualquiera podía **falsificar un token con rol `admin`**,
+anulando RF-01.3 y RF-01.4. El sistema no daba ningún aviso.
 
-**Por qué es deuda.** El respaldo es una decisión deliberada y razonable para
-que el proyecto arranque sin configuración previa —el propio comentario en el
-código lo explica—, pero el fallo es *silencioso*: no hay ninguna señal que
-distinga "estoy en desarrollo" de "me desplegaron sin configurar".
+**Cómo se resolvió.** Se introdujo la noción explícita de entorno que proponía
+la entrada original. [`settings.py`](../src/orderhub/settings.py) define
+`APP_ENV` (por defecto `development`) y resuelve los secretos a través de
+`_required_secret()`:
 
-**Qué riesgo implica.** Si el sistema se despliega sin definir
-`JWT_SECRET_KEY`, la clave de firma es pública (está en este repositorio) y
-cualquiera puede **falsificar un token con rol `admin`**, lo que anula por
-completo RF-01.3 y RF-01.4. El sistema no daría ningún aviso.
+```python
+def _required_secret(name: str, development_fallback: str) -> str:
+    value = os.environ.get(name)
+    if value:
+        return value
+    if APP_ENV == DEVELOPMENT:
+        return development_fallback
+    raise MissingConfigurationError(name)
+```
 
-**Cuál sería la solución.** Introducir una noción explícita de entorno (por
-ejemplo `APP_ENV`) y hacer que la ausencia de `JWT_SECRET_KEY` sea un error
-fatal al arrancar en cualquier entorno que no sea desarrollo, conservando el
-respaldo solo en local.
+| `APP_ENV` | Falta `JWT_SECRET_KEY` / `FLASK_SECRET_KEY` |
+| :--- | :--- |
+| `development` (defecto) | Cae al respaldo: el proyecto arranca sin configurar |
+| Cualquier otro (`staging`, `production`, …) | `MissingConfigurationError` **al importar el módulo**: la aplicación no llega a arrancar |
+
+Un valor **vacío** cuenta como ausente, porque es justo lo que deja
+`.env.example` al copiarse sin rellenar. El fallo es ruidoso y ocurre en el
+arranque, no en la primera petición.
+
+**Comprobado.** `APP_ENV=production python -c "import app"` aborta con el
+mensaje que nombra la variable que falta y remite a `.env.example`. Los once
+casos de
+[`tests/unit/test_settings.py`](../tests/unit/test_settings.py) cubren ambos
+entornos, el valor vacío y la precedencia del entorno sobre el respaldo.
+
+**Nota.** Los dos respaldos de desarrollo siguen siendo literales en
+`settings.py`, y eso es intencionado: no son secretos de producción sino
+valores marcados como inseguros que ya **no pueden alcanzar** un despliegue
+real, porque fuera de `development` el arranque falla antes de usarlos.
 
 ---
 
@@ -326,7 +373,7 @@ hallazgo, pero los módulos legados de la raíz acumulaban **9 hallazgos**:
 
 | Archivo:línea | Código | Detalle | Estado |
 | :--- | :--- | :--- | :--- |
-| `app.py:12-16` | `E402` (×5) | Imports no situados al inicio del archivo | 🔴 Pendiente |
+| `app.py:12-17` | `E402` (×6) | Imports no situados al inicio del archivo | 🔴 Pendiente |
 | `app.py:58` | `E501` | Línea de 105 caracteres (comentario del HTML legado) | ✅ Resuelto |
 | `database.py:89, 93, 97` | `E501` (×3) | Sentencias `INSERT` de 92–94 caracteres | ✅ Resuelto |
 
@@ -338,8 +385,11 @@ hallazgo, pero los módulos legados de la raíz acumulaban **9 hallazgos**:
   literales de cadena adyacentes, el mismo criterio ya aplicado en
   `sqlite_order_repository.py` y `sqlite_user_repository.py`.
 
-Estado actual verificado: `flake8 app.py config.py database.py` reporta
-**exactamente 5 hallazgos, todos `E402` en `app.py:12-16`**.
+Estado actual verificado: `flake8 app.py database.py` reporta **exactamente
+6 hallazgos, todos `E402` en `app.py:12-17`**. Eran 5 hasta la entrega 3:
+`config.py` desapareció al resolverse [DT-01](#dt-01--secretos-hardcodeados-en-configpy-resuelta)
+y `app.py` ganó un import más (`from orderhub import settings`), que cae bajo
+el mismo `sys.path.insert` y por tanto bajo el mismo `E402`.
 
 **Por qué los `E402` siguen abiertos — y por qué no se silencian.** No son un
 descuido de formato: son **estructurales**. [`app.py:10`](../app.py) inserta
@@ -354,17 +404,17 @@ from orderhub.adapters.inbound.http.auth_controller import create_auth_blueprint
 
 Mover esos imports arriba rompería el arranque de la aplicación. **Decisión
 tomada:** no se añade `# noqa` ni se excluye la raíz en
-[`setup.cfg`](../setup.cfg), para que los cinco hallazgos **sigan apareciendo en
+[`setup.cfg`](../setup.cfg), para que los seis hallazgos **sigan apareciendo en
 el reporte** y la deuda permanezca visible en lugar de quedar enmascarada.
 
 **Qué riesgo implica.** RNF-01.3 exige que «el código» cumpla PEP 8. Una futura
 puerta de calidad en CI (HU-05) que ejecute flake8 sobre todo el repositorio
-fallaría por estos cinco hallazgos.
+fallaría por estos seis hallazgos.
 
 **Cuál sería la solución.** Empaquetar el proyecto: un `pyproject.toml` que
 declare `src` como *package directory* e instalación en modo editable
 (`pip install -e .`). Eso elimina la manipulación de `sys.path` y con ella los
-cinco `E402`, sin necesidad de excluir ni silenciar nada. Se resuelve de forma
+seis `E402`, sin necesidad de excluir ni silenciar nada. Se resuelve de forma
 natural junto con DT-06.
 
 ---
@@ -505,6 +555,21 @@ si alguien reintrodujera la concatenación:
 | [`test_sqlite_user_repository.py:62-66`](../tests/integration/test_sqlite_user_repository.py) | `find_by_username("' OR '1'='1")` devuelve `None` en lugar de un usuario |
 | [`test_sqlite_product_repository.py:58-59`](../tests/integration/test_sqlite_product_repository.py) | Persiste el nombre `"Teclado 'Pro' de O'Brien; DROP TABLE products;--"` de forma literal y sin romper la consulta |
 
+**Ampliación en la entrega 3 — guarda estática sobre todo el repositorio.**
+Los tests anteriores prueban los tres caminos que hoy existen; no dicen nada de
+una consulta nueva escrita mañana en otro archivo. Se añadió
+[`tests/unit/security/test_sql_queries_are_parameterized.py`](../tests/unit/security/test_sql_queries_are_parameterized.py),
+que analiza el **árbol sintáctico (AST) de todos los `.py` del proyecto** —el
+código hexagonal y también el legado de la raíz— y falla si alguna cadena con
+forma de SQL se construye por f-string, `+`, `%` o `.format()`.
+
+Se comprueba que el detector funciona probándolo contra ejemplos vulnerables
+conocidos, y que el descubrimiento de archivos no se ha roto (un descubrimiento
+vacío haría que la guarda pasara sin analizar nada). **Resultado de la auditoría
+sobre el estado actual: cero hallazgos**, tanto en `src/orderhub/` como en
+`app.py` y `database.py`, cuyas sentencias `INSERT`/`UPDATE`/`SELECT` ya usan
+marcadores `?`.
+
 **Deuda residual.** Ninguna en el flujo migrado. Se conserva esta entrada como
 registro histórico y como protección: cualquier revisión futura debe mantener
 estos tests.
@@ -591,10 +656,29 @@ que exige una transacción real. Conviene no dar el requisito por satisfecho
 leyendo solo la primera mitad.
 
 **Por qué no es un descuido de esta iteración.** RF-03.3 pertenece a una entrega
-posterior; el alcance de esta iteración fue la seguridad de la API (RF-01.x),
-la cobertura de pruebas y la calidad de código. La deuda se registra ahora
+posterior; el alcance de aquella iteración fue la seguridad de la API (RF-01.x),
+la cobertura de pruebas y la calidad de código. La deuda se registró entonces
 porque se detectó al auditar el flujo, no porque estuviera comprometida para
-esta entrega.
+esa entrega.
+
+**Actualización (entrega 3 — relación con RF-02.2).** Al entrar RF-02 en
+alcance, esta deuda pasa a tocar un requisito ya entregado. Conviene precisar
+qué cumple y qué no:
+
+* **RF-02.2 se cumple**: el stock se descuenta y se persiste al procesar la
+  orden, verificado contra la base de datos real en
+  [`test_catalog_flow_http.py`](../tests/integration/test_catalog_flow_http.py).
+* **RF-02.3 se cumple**: la compra se rechaza antes de escribir nada, así que
+  el caso de rechazo no depende en absoluto de la atomicidad.
+* **Lo que sigue sin garantizarse** es el caso de fallo entre las dos
+  escrituras: orden persistida sin descuento de stock. Es exactamente el
+  descuadre de inventario que describe esta entrada, y sigue exigiendo el
+  patrón Unit of Work.
+
+Es decir: RF-02 no depende de DT-13 para darse por cumplido, pero DT-13 sí
+limita la fiabilidad del inventario que RF-02 introduce. Por eso su prioridad
+sube tras esta entrega, aunque el requisito que la cierra (RF-03.3) siga siendo
+posterior.
 
 **Cuál sería la solución.** El patrón **Unit of Work**: una unidad de trabajo
 que agrupe ambas operaciones bajo una **única transacción**, con un solo
@@ -620,6 +704,78 @@ requisito ineludible.
 
 **Nota de alcance.** No afecta a `CreateProduct`, que realiza una única
 escritura y por tanto ya es atómico por definición.
+
+---
+
+## DT-14 — El catálogo no distingue productos sin stock ni pagina
+
+**Estado:** 🔴 Abierta · **Requisito:** RF-02.1 · **Severidad:** Baja
+
+**Qué es.** `GET /products` devuelve **el catálogo completo, en una sola
+respuesta y sin filtros**: incluye los productos con `stock = 0` y no admite
+paginación ni búsqueda.
+
+**Dónde está.** [`list_products.py`](../src/orderhub/application/use_cases/list_products.py)
+delega en `ProductRepository.find_all()`, que en
+[`sqlite_product_repository.py`](../src/orderhub/adapters/outbound/persistence/sqlite/sqlite_product_repository.py)
+ejecuta un `SELECT ... FROM products ORDER BY id` sin `WHERE` ni `LIMIT`.
+
+**Por qué es deuda.** RF-02.1 habla de «productos **disponibles**», y ahí caben
+dos lecturas: todo el catálogo con su stock a la vista, o solo lo que se puede
+comprar ahora. Se implementó la primera —el requisito exige mostrar «el stock
+actual», lo que carece de sentido si se ocultan las filas en cero, y un
+producto agotado sigue siendo información útil para el comprador y para el
+administrador—, pero la decisión no está respaldada por el enunciado: es una
+interpretación.
+
+**Qué riesgo implica.** Ninguno de seguridad ni de corrección. Con dos
+productos sembrados el coste es irrelevante; con un catálogo de miles de filas,
+la respuesta crece sin límite y la petición se vuelve costosa en memoria y en
+ancho de banda.
+
+**Cuál sería la solución.** Confirmar la lectura de RF-02.1 con el enunciado
+del curso y, si procede, añadir parámetros de consulta opcionales
+(`?available=true`, `?limit=&offset=`) traducidos a argumentos del caso de uso.
+El puerto lo admite sin romper nada: `find_all()` se acompañaría de un método
+con criterios, sin cambiar la firma existente. La paginación conviene
+abordarla junto con la migración a PostgreSQL (RNF-03.1).
+
+---
+
+## DT-15 — `database.py` siembra datos de prueba en cualquier entorno
+
+**Estado:** 🔴 Abierta · **Requisito:** RNF-02.1 · **Severidad:** Media en despliegue, nula en desarrollo
+
+**Qué es.** `init_db()` crea el esquema y, si la tabla `users` está vacía,
+inserta dos usuarios de demostración con contraseñas conocidas —`admin/admin123`
+y `juan/123456`— y dos productos de ejemplo. Lo hace **sin comprobar el
+entorno**.
+
+**Dónde está.** [`database.py`](../database.py), bloque
+`if cursor.fetchone()[0] == 0:` dentro de `init_db()`. Se invoca desde
+[`app.py`](../app.py) en cada arranque.
+
+**Por qué es deuda.** Son credenciales conocidas y versionadas: cumplen la
+misma función que un secreto hardcodeado, aunque técnicamente sean datos y no
+configuración. Quedan fuera del alcance literal de RNF-02.1 —no están en un
+módulo de configuración— pero comparten exactamente su riesgo.
+
+**Qué riesgo implica.** Un despliegue contra una base vacía nace con una cuenta
+`admin` de contraseña pública. Las guardas de
+[DT-02](#dt-02--valor-por-defecto-inseguro-de-jwt_secret_key-resuelta) no lo
+cubren: protegen la clave de firma, no el contenido sembrado en la base.
+
+**Por qué no se resolvió en esta entrega.** La siembra es lo que hace
+utilizable el proyecto en local y lo que consume la suite de integración como
+datos de referencia. Quitarla sin una alternativa rompería ambos flujos, y el
+alcance comprometido aquí era RF-02 y RNF-02.1/02.2. Se registra ahora porque
+se detectó al auditar la configuración, no porque estuviera comprometida.
+
+**Cuál sería la solución.** Condicionar la siembra a
+`settings.APP_ENV == "development"` —la noción de entorno ya existe— y separar
+la creación del esquema (siempre) de la carga de datos de ejemplo (solo en
+desarrollo). Encaja de forma natural con DT-06, que ya propone sacar `init_db()`
+del cuerpo de módulo de `app.py`.
 
 ---
 

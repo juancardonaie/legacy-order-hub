@@ -31,9 +31,11 @@ Problemas concretos que tenía esa versión (visibles en `git show 4c79d1d`):
   `f"SELECT * FROM users WHERE username = '{username}' AND password = '{password}'"`.
 * **Contraseñas en texto plano**: la tabla `users` solo tenía la columna
   `password` y se comparaba en texto plano.
-* **Secretos hardcodeados**: `config.py` define `SECRET_KEY` y credenciales
+* **Secretos hardcodeados**: `config.py` definía `SECRET_KEY` y credenciales
   de una base de datos (`DB_HOST`, `DB_USER`, `DB_PASS`, `DB_NAME`)
-  directamente en el código fuente.
+  directamente en el código fuente. El archivo ya no existe: la configuración
+  se lee del entorno
+  ([DT-01](TECHNICAL_DEBT_LOG.md#dt-01--secretos-hardcodeados-en-configpy-resuelta)).
 * **Todo en `app.py`**: los tres endpoints (`/login`, `/create_order`,
   `/get_all_orders_legacy`) tenían el control HTTP, la lógica de negocio y el
   SQL en la misma función, sin ninguna capa intermedia.
@@ -58,13 +60,19 @@ Toda la lógica vive en `src/orderhub/`, siguiendo Arquitectura Hexagonal.
   `TokenServicePort` y su adaptador `JWTTokenService` (RF-01.3, sección 4).
 * **Autorización por rol** mediante los decoradores `jwt_required` y
   `require_role`, aplicados sobre las vistas HTTP (RF-01.4, sección 5).
-* **Cuatro endpoints de API** más el panel HTML: `/login`, `/create_order`,
-  `/get_all_orders_legacy` y `/products` (sección 5.3).
-* **Consultas parametrizadas** (`?`) en los tres repositorios SQLite; no queda
-  concatenación de strings en SQL.
-* **Configuración desde variables de entorno** en `src/orderhub/settings.py`
-  para todo lo relativo a JWT.
-* **125 tests** (unitarios y de integración) con **100 % de cobertura sobre
+* **Cinco endpoints de API** más el panel HTML: `POST /login`,
+  `POST /create_order`, `GET /get_all_orders_legacy`, `POST /products` y
+  `GET /products` (sección 5.3).
+* **Catálogo e inventario (RF-02)**: consulta del catálogo con precio y stock
+  actual, descuento de stock al comprar y rechazo de compras que superan la
+  disponibilidad (sección 5-bis).
+* **Consultas parametrizadas** (`?`) en todo el proyecto; no queda concatenación
+  de strings en SQL ni en `src/orderhub/` ni en los módulos legados de la raíz,
+  verificado por análisis AST en la propia suite (sección 8.4).
+* **Cero secretos en el código fuente**: toda la configuración se lee del
+  entorno en `src/orderhub/settings.py`, alimentado por un `.env` que no se
+  versiona. `config.py` fue eliminado (RNF-02.1, sección 3.5).
+* **251 tests** (unitarios y de integración) con **100 % de cobertura sobre
   `src/orderhub/`** (sección 9).
 
 `database.py` se mantiene solo para el *bootstrap* del esquema y una migración
@@ -84,13 +92,18 @@ tiene el proyecto:
 * **No hay registro de usuarios.** Los usuarios se siembran en `database.py`;
   no existe endpoint de alta ni caso de uso de creación de usuarios, y por
   tanto tampoco un flujo de hashing en alta (solo en el sembrado).
-* **No hay gestión de productos más allá del alta y la consulta interna.** No
-  existen endpoints de listado, edición ni borrado de productos; `RF-02.1`
-  (consultar catálogo por API) sigue pendiente.
+* **No hay edición ni borrado de productos.** El catálogo admite alta
+  (`POST /products`, solo admin) y consulta (`GET /products`, RF-02.1), pero no
+  hay endpoints de modificación ni de baja. El listado devuelve el catálogo
+  completo, sin filtro por disponibilidad ni paginación
+  ([DT-14](TECHNICAL_DEBT_LOG.md#dt-14--el-catálogo-no-distingue-productos-sin-stock-ni-pagina)).
 * **La columna `password` en texto plano todavía existe** en la tabla `users`
   ([DT-03](TECHNICAL_DEBT_LOG.md#dt-03--columna-password-en-texto-plano-en-el-esquema)).
-* **`config.py` sigue teniendo secretos hardcodeados**
-  ([DT-01](TECHNICAL_DEBT_LOG.md#dt-01--secretos-hardcodeados-en-configpy)).
+* **El descuento de stock no es transaccional.** `CreateOrder` persiste la
+  orden y actualiza el stock en dos transacciones separadas
+  ([DT-13](TECHNICAL_DEBT_LOG.md#dt-13--createorder-no-es-atómico-dos-transacciones-separadas)).
+* **`init_db()` siembra usuarios de demostración en cualquier entorno**
+  ([DT-15](TECHNICAL_DEBT_LOG.md#dt-15--databasepy-siembra-datos-de-prueba-en-cualquier-entorno)).
 * **No hay capa de notificaciones (`NotifierPort`).** El aviso de "orden
   creada" sigue siendo un `print()`
   ([DT-10](TECHNICAL_DEBT_LOG.md#dt-10--la-notificación-de-orden-sigue-siendo-un-print)).
@@ -117,9 +130,10 @@ hexagonal se tocan.
 ```text
 legacy-order-hub/
 ├── app.py                          # Composition root: Container + blueprints + jwt_required
-├── config.py                       # Configuración legada (SECRET_KEY, etc.) — deuda DT-01
+├── .env.example                    # Plantilla de variables de entorno, SIN valores (RNF-02.1)
+├── .env                            # Configuración local real — IGNORADO por Git, nunca se versiona
 ├── database.py                     # Bootstrap del esquema SQLite + migración de password_hash
-├── requirements.txt                # Dependencias de ejecución (incluye PyJWT y bcrypt)
+├── requirements.txt                # Dependencias de ejecución (PyJWT, bcrypt, python-dotenv)
 ├── requirements-dev.txt            # pytest, pytest-cov, flake8, black
 ├── setup.cfg                       # Configuración de flake8 (max-line-length = 88)
 ├── pytest.ini                      # pythonpath = src ; testpaths = tests
@@ -131,7 +145,7 @@ legacy-order-hub/
 │   └── TECHNICAL_DEBT_LOG.md       # Registro de deuda técnica (HU-01.1)
 ├── src/
 │   └── orderhub/
-│       ├── settings.py             # Configuración JWT leída del entorno (os.environ)
+│       ├── settings.py             # ÚNICA fuente de configuración: .env + os.environ (RNF-02.1)
 │       ├── domain/
 │       │   ├── entities/
 │       │   │   ├── order.py        # Order (dataclass) + Order.create()
@@ -149,12 +163,13 @@ legacy-order-hub/
 │       │       ├── authenticate_user.py
 │       │       ├── create_order.py
 │       │       ├── create_product.py        # RF-01.4
-│       │       └── list_orders.py
+│       │       ├── list_orders.py
+│       │       └── list_products.py         # RF-02.1: catálogo con precio y stock
 │       ├── adapters/
 │       │   ├── inbound/http/
 │       │   │   ├── auth_controller.py       # POST /login (emite el token)
 │       │   │   ├── order_controller.py      # POST /create_order, GET /get_all_orders_legacy
-│       │   │   ├── product_controller.py    # POST /products (solo admin)
+│       │   │   ├── product_controller.py    # POST /products (admin) + GET /products
 │       │   │   ├── jwt_required.py          # Decorador de autenticación
 │       │   │   └── require_role.py          # Decorador de autorización
 │       │   └── outbound/
@@ -170,10 +185,12 @@ legacy-order-hub/
 └── tests/
     ├── conftest.py                 # Fixtures comunes (identidades, helper Bearer)
     ├── unit/
+    │   ├── test_settings.py        # 11 tests (configuración por entorno)
     │   ├── domain/                 # 10 tests
-    │   ├── application/            # 19 tests
-    │   └── adapters/               # 47 tests
-    └── integration/                # 49 tests (Flask + SQLite reales)
+    │   ├── application/            # 25 tests
+    │   ├── adapters/               # 63 tests
+    │   └── security/               # 80 tests (guardas RNF-02.1 y RNF-02.2)
+    └── integration/                # 62 tests (Flask + SQLite reales)
 ```
 
 ### 2.2 Diagrama C4 — Nivel 1: Contexto
@@ -225,12 +242,12 @@ flowchart TB
     subgraph sistema ["Legacy OrderHub"]
         direction TB
         panel["<b>Panel de monitoreo</b><br/>[Contenedor: HTML + JavaScript]<br/><br/>templates/index.html<br/>Servido por GET /"]
-        api["<b>API Flask</b><br/>[Contenedor: Python 3.9 + Flask]<br/><br/>app.py — proceso único, puerto 5001<br/>Arquitectura hexagonal en src/orderhub/<br/>Emite y verifica JWT (HS256)"]
-        db[("<b>Base de datos</b><br/>[Contenedor: SQLite]<br/><br/>orderhub.db — fichero local<br/>Tablas: users, products, orders")]
+        api["<b>API Flask</b><br/>[Contenedor: Python 3.9 + Flask]<br/><br/>app.py — proceso único, puerto 5001<br/>Arquitectura hexagonal en src/orderhub/<br/>Emite y verifica JWT (HS256)<br/>Configuración desde .env (RNF-02.1)"]
+        db[("<b>Base de datos</b><br/>[Contenedor: SQLite]<br/><br/>Ruta en DATABASE_PATH — fichero local<br/>Tablas: users, products, orders")]
     end
 
-    admin -->|"POST /login, POST /products,<br/>POST /create_order · JSON"| api
-    cliente -->|"POST /login,<br/>POST /create_order · JSON"| api
+    admin -->|"POST /login, POST /products,<br/>GET /products, POST /create_order · JSON"| api
+    cliente -->|"POST /login, GET /products,<br/>POST /create_order · JSON"| api
     admin -->|"Abre el panel · HTTP"| panel
     cliente -->|"Abre el panel · HTTP"| panel
 
@@ -282,7 +299,7 @@ flowchart LR
 
     subgraph application ["APPLICATION · orquestación"]
         direction TB
-        uc["Casos de uso<br/>AuthenticateUser · CreateOrder<br/>CreateProduct · ListOrders"]
+        uc["Casos de uso<br/>AuthenticateUser · CreateOrder<br/>CreateProduct · ListOrders · ListProducts"]
         ports["Ports (ABC)<br/>UserRepository · ProductRepository<br/>OrderRepository · PasswordHasher<br/>TokenServicePort"]
     end
 
@@ -466,24 +483,57 @@ términos del dominio (`find_by_id`, `save`, `find_all`, etc.).
 
 ### 3.5 Configuración (`src/orderhub/settings.py`)
 
-Módulo que lee del entorno toda la configuración de infraestructura relativa a
-JWT, con valores por defecto para que el proyecto arranque sin configuración
-previa:
+**Única fuente de configuración del proyecto** (RNF-02.1). Lee del entorno todo
+lo que necesita la infraestructura; el antiguo `config.py` de la raíz, que
+declaraba secretos como literales, fue eliminado al resolverse
+[DT-01](TECHNICAL_DEBT_LOG.md#dt-01--secretos-hardcodeados-en-configpy-resuelta).
 
-| Variable de entorno | Valor por defecto | Uso |
-| :--- | :--- | :--- |
-| `JWT_SECRET_KEY` | `dev-only-insecure-jwt-secret-change-me` | Clave de firma HS256 |
-| `JWT_ALGORITHM` | `HS256` | Algoritmo de firma |
-| `JWT_EXPIRATION_MINUTES` | `60` | Tiempo de vida del token |
+| Variable de entorno | Obligatoria | Valor por defecto | Uso |
+| :--- | :--- | :--- | :--- |
+| `APP_ENV` | No | `development` | Distingue local de despliegue |
+| `JWT_SECRET_KEY` | **Sí fuera de `development`** | respaldo de desarrollo | Clave de firma HS256 |
+| `FLASK_SECRET_KEY` | **Sí fuera de `development`** | respaldo de desarrollo | Clave de sesión de Flask |
+| `JWT_ALGORITHM` | No | `HS256` | Algoritmo de firma |
+| `JWT_EXPIRATION_MINUTES` | No | `60` | Tiempo de vida del token |
+| `DATABASE_PATH` | No | `orderhub.db` | Ruta del fichero SQLite |
 
 Vive junto al composition root porque es él quien decide con qué valores se
 construyen los adaptadores; ni el dominio ni la capa de aplicación lo importan.
 
-> Es el patrón que `config.py` debería seguir y no sigue
-> ([DT-01](TECHNICAL_DEBT_LOG.md#dt-01--secretos-hardcodeados-en-configpy)). El
-> valor por defecto de `JWT_SECRET_KEY` es a su vez deuda propia
-> ([DT-02](TECHNICAL_DEBT_LOG.md#dt-02--valor-por-defecto-inseguro-de-jwt_secret_key)):
-> es cómodo en desarrollo y peligroso si se despliega sin configurar.
+**De dónde salen los valores.** `settings.py` llama a `load_dotenv()`, que
+carga un `.env` de la raíz si existe. `.env` está en `.gitignore` y **nunca se
+versiona**; lo que sí se versiona es
+[`.env.example`](../.env.example), una plantilla que enumera las variables sin
+ningún valor real. El entorno del proceso tiene precedencia sobre el `.env`,
+para que en producción mande la configuración del contenedor.
+
+**Los secretos fallan ruidosamente fuera de desarrollo.** El respaldo de
+desarrollo sigue existiendo —el proyecto debe arrancar recién clonado— pero ya
+no puede alcanzar un despliegue real: con `APP_ENV` distinto de `development`,
+la ausencia de un secreto lanza `MissingConfigurationError` **al importar el
+módulo**, de modo que la aplicación no llega a arrancar en vez de firmar
+tokens con una clave pública
+([DT-02](TECHNICAL_DEBT_LOG.md#dt-02--valor-por-defecto-inseguro-de-jwt_secret_key-resuelta)).
+
+```mermaid
+flowchart TD
+    inicio(["Arranque: import orderhub.settings"]) --> dotenv["load_dotenv()<br/>carga .env si existe"]
+    dotenv --> lee{"¿La variable está<br/>definida y no vacía?"}
+    lee -->|"Sí"| usa["Usa el valor del entorno"]
+    lee -->|"No"| entorno{"APP_ENV == 'development'?"}
+    entorno -->|"Sí"| fallback["Usa el respaldo de desarrollo<br/>(marcado como inseguro)"]
+    entorno -->|"No"| error["MissingConfigurationError<br/>La app NO arranca"]
+    usa --> ok(["Container construye los adaptadores"])
+    fallback --> ok
+
+    classDef bien fill:#e6f7e9,stroke:#3ba757,color:#17431f
+    classDef aviso fill:#fdf0e3,stroke:#c9723b,color:#5a3419
+    classDef fallo fill:#fde3e3,stroke:#c93b3b,color:#5a1919
+
+    class usa,ok bien
+    class fallback aviso
+    class error fallo
+```
 
 ---
 
@@ -667,12 +717,20 @@ Verificado leyendo cada decorador en los controladores:
 | `POST` | `/login` | ❌ **Público** | — | `auth_controller.py:23` |
 | `POST` | `/create_order` | ✅ `@jwt_required` | Cualquiera autenticado | `order_controller.py:31-32` |
 | `GET` | `/get_all_orders_legacy` | ✅ `@jwt_required` | Cualquiera autenticado | `order_controller.py:69-70` |
-| `POST` | `/products` | ✅ `@jwt_required` | **`admin`** | `product_controller.py:28-30` |
+| `GET` | `/products` | ✅ `@jwt_required` | Cualquiera autenticado | `product_controller.py:43-44` |
+| `POST` | `/products` | ✅ `@jwt_required` | **`admin`** | `product_controller.py:49-51` |
 
 **Por qué `/create_order` no exige rol `admin`:** crear una orden *es comprar*.
 Restringirlo a administradores impediría el caso de uso central del sistema. La
 restricción administrativa de RF-01.4 aplica a la gestión del **catálogo**
 (`POST /products`), no a la compra.
+
+**Por qué `GET /products` no exige rol `admin`:** consultar el catálogo es el
+paso previo a comprar, así que restringirlo a administradores bloquearía a los
+compradores. La misma ruta tiene por eso dos niveles de protección según el
+método: leer el catálogo basta con estar autenticado; **modificarlo** exige
+`admin`. Se exige token —y no acceso público— por coherencia con el resto de la
+API: el catálogo expone el stock, que es información de negocio.
 
 **Por qué `GET /` es público:** es el panel HTML de monitoreo, no una operación
 sobre datos. Sirve la plantilla y nada más; los datos que intenta pintar sí
@@ -767,6 +825,90 @@ sequenceDiagram
 | Firma inválida o token manipulado | `TokenServicePort` → `jwt_required` | `401 Token inválido` |
 | Rol `client` en `/products` | `require_role` | `403 No tienes permisos...` |
 | Datos de producto inválidos | `Product.create()` | `400` con el mensaje del dominio |
+| Producto inexistente en la compra | `CreateOrder` | `404 Producto no encontrado` |
+| Stock insuficiente (RF-02.3) | `CreateOrder` | `400 Stock insuficiente` + `requested` y `available` |
+
+---
+
+## 5-bis. Catálogo e inventario (RF-02)
+
+### 5-bis.1 Qué pieza añade cada sub-requisito
+
+RF-02 **no introduce una capa nueva**: reutiliza exactamente la estructura ya
+establecida. Lo único que se añadió fue un caso de uso, un método al puerto de
+productos y una ruta al controlador que ya existía.
+
+| Sub-requisito | Pieza nueva | Pieza reutilizada |
+| :--- | :--- | :--- |
+| RF-02.1 — consultar catálogo | `ListProducts`, `ProductRepository.find_all()`, `GET /products` | `Product`, `SQLiteProductRepository`, `jwt_required` |
+| RF-02.2 — descontar stock | *(ninguna)* | `Product.decrease_stock()` y `CreateOrder`, ya existentes |
+| RF-02.3 — rechazar por stock | *(ninguna regla nueva)*; solo se enriqueció la respuesta HTTP | `InsufficientStockError`, `Product.has_stock_for()` |
+
+Que RF-02.2 y RF-02.3 no necesitaran código de dominio nuevo **no es
+casualidad**: la regla de stock se modeló en `Product` desde la migración a
+hexagonal, antes de que el requisito entrase en alcance. Lo que sí cambió es
+el contrato HTTP del rechazo: antes devolvía solo `{"error": "Stock
+insuficiente"}` y ahora incluye `product_id`, `requested` y `available`, para
+que el cliente pueda explicar el fallo sin adivinar.
+
+### 5-bis.2 Flujo de una compra y su efecto en el inventario
+
+Dónde se decide cada cosa: la **regla** de si hay stock vive en el dominio, la
+**orquestación** en el caso de uso, la **traducción a HTTP** en el adaptador y
+el **SQL** en el repositorio. Ninguna de esas responsabilidades cruza de capa.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor C as Cliente
+    participant OC as order_controller<br/>(adapter inbound)
+    participant CO as CreateOrder<br/>(use case)
+    participant PR as ProductRepository<br/>(port)
+    participant P as Product<br/>(domain)
+    participant OR as OrderRepository<br/>(port)
+
+    C->>OC: POST /create_order<br/>{product_id, quantity} + Bearer
+    OC->>CO: execute(user_id del token, product_id, quantity)
+    CO->>PR: find_by_id(product_id)
+    PR-->>CO: Product(stock actual)
+
+    alt Producto inexistente
+        CO-->>OC: ProductNotFoundError
+        OC-->>C: 404 Producto no encontrado
+    else Stock insuficiente (RF-02.3)
+        CO->>P: has_stock_for(quantity)
+        P-->>CO: False
+        CO-->>OC: InsufficientStockError<br/>(requested, available)
+        OC-->>C: 400 Stock insuficiente<br/>+ requested y available
+        Note over PR,OR: No se escribe NADA:<br/>ni orden ni descuento
+    else Hay stock (RF-02.2)
+        CO->>P: Order.create(...) → product.price_for(quantity)
+        CO->>OR: save(order)
+        OR-->>CO: Order con id
+        CO->>P: decrease_stock(quantity)
+        CO->>PR: update_stock(product)
+        Note over OR,PR: Dos transacciones separadas:<br/>deuda DT-13
+        CO-->>OC: Order
+        OC-->>C: 201 {order_id, total}
+    end
+```
+
+> **La nota de DT-13 es parte del diagrama a propósito.** Los pasos `save` y
+> `update_stock` se confirman por separado en la base de datos. Si el proceso
+> muere entre ambos, queda una orden sin su descuento de stock. Se documenta
+> aquí y no solo en el registro de deuda porque es una propiedad del flujo que
+> este diagrama describe, y ocultarla haría que el dibujo prometiese más
+> garantías de las que el código da. Ver
+> [DT-13](TECHNICAL_DEBT_LOG.md#dt-13--createorder-no-es-atómico-dos-transacciones-separadas).
+
+### 5-bis.3 Por qué `ListProducts` devuelve entidades y no JSON
+
+`ListProducts.execute()` devuelve `List[Product]`, no una lista de
+diccionarios. La serialización vive en `product_controller._serialize()`, la
+misma función que usa `POST /products` para su respuesta. El motivo es el de
+siempre en esta arquitectura: el caso de uso debe poder invocarse desde un
+script, una tarea programada o un futuro adaptador gRPC sin arrastrar la forma
+del JSON de la API HTTP.
 
 ---
 
@@ -780,22 +922,28 @@ sequenceDiagram
 | **JWT con expiración (RF-01.3)** | ✅ **Implementado** | `TokenServicePort` / `JWTTokenService`, claim `exp` obligatorio |
 | **Autorización por rol (RF-01.4)** | ✅ **Implementado** | `jwt_required` + `require_role("admin")` sobre `POST /products` |
 | **Endpoint de creación de productos** | ✅ **Implementado** | `POST /products`, restringido a `admin` |
+| **Consulta del catálogo (RF-02.1)** | ✅ **Implementada** | `GET /products` con precio y stock actual; caso de uso `ListProducts` |
+| **Descuento de stock al comprar (RF-02.2)** | ✅ **Implementado** | `CreateOrder` → `Product.decrease_stock()` → `update_stock()`; no transaccional ([DT-13](TECHNICAL_DEBT_LOG.md#dt-13--createorder-no-es-atómico-dos-transacciones-separadas)) |
+| **Rechazo por stock insuficiente (RF-02.3)** | ✅ **Implementado** | `400` con `requested` y `available`, no una excepción cruda |
 | Endpoint de creación de orden (`POST /create_order`) | ✅ Implementado | Protegido; `user_id` tomado del token |
 | Endpoint de listado de órdenes (`GET /get_all_orders_legacy`) | ✅ Implementado | Protegido; nombre de ruta conservado del legado |
-| Configuración JWT por variables de entorno | ✅ Implementada | `settings.py` (`os.environ`) |
-| **Tests unitarios** | ✅ Implementados | 76 tests: dominio (10), aplicación (19), adaptadores (47) |
-| **Tests de integración HTTP** | ✅ **Implementados** | 49 tests con Flask `test_client()` y SQLite real |
-| **Cobertura ≥ 80 % (RNF-01.2)** | ✅ **Cumplida** | 100 % en `src/orderhub/`; 86 % del código fuente total |
+| **Configuración sin secretos en código (RNF-02.1)** | ✅ **Cumplida** | `config.py` eliminado; `.env` + `settings.py`; guarda automática en la suite |
+| **Consultas parametrizadas (RNF-02.2)** | ✅ **Cumplida** | Cero concatenación de SQL en todo el repositorio, verificado por análisis AST en cada ejecución de la suite |
+| **Tests unitarios** | ✅ Implementados | 189 tests: dominio (10), aplicación (25), adaptadores (63), seguridad (80), configuración (11) |
+| **Tests de integración HTTP** | ✅ **Implementados** | 62 tests con Flask `test_client()` y SQLite real |
+| **Cobertura ≥ 80 % (RNF-01.2)** | ✅ **Cumplida** | 100 % en `src/orderhub/`; 95 % del proyecto completo |
 | **PEP 8 en `src/orderhub/` y `tests/` (RNF-01.3)** | ✅ **Cumplida** | `flake8` y `black --check` sin ningún hallazgo |
-| PEP 8 en los archivos de la raíz | ⚠️ Parcial | `E501` resueltos; quedan 5 `E402` estructurales en `app.py` ([DT-08](TECHNICAL_DEBT_LOG.md#dt-08--los-archivos-de-la-raíz-no-pasan-flake8-parcialmente-resuelta)) |
+| PEP 8 en los archivos de la raíz | ⚠️ Parcial | `E501` resueltos; quedan 6 `E402` estructurales en `app.py` ([DT-08](TECHNICAL_DEBT_LOG.md#dt-08--los-archivos-de-la-raíz-no-pasan-flake8-parcialmente-resuelta)) |
 | Unicidad de `users.username` | ✅ Implementada | `UNIQUE` en el esquema + índice único para bases existentes ([DT-09](TECHNICAL_DEBT_LOG.md#dt-09--el-esquema-no-tiene-restricciones-de-integridad-parcialmente-resuelta)) |
 | Claves foráneas y `NOT NULL` en el esquema | ❌ No implementadas | Requiere recrear tablas ([DT-09](TECHNICAL_DEBT_LOG.md#dt-09--el-esquema-no-tiene-restricciones-de-integridad-parcialmente-resuelta)) |
 | Interfaz gráfica de login | ❌ No implementada | El panel no envía token ([DT-05](TECHNICAL_DEBT_LOG.md#dt-05--el-panel-html-no-envía-el-token)) |
 | Registro de usuarios por API | ❌ No implementado | Los usuarios se siembran en `database.py` |
-| Consulta del catálogo por API (RF-02.1) | ❌ No implementado | Existe `find_by_id` interno, no un endpoint `GET /products` |
 | Refresh token / revocación / logout | ❌ No implementado | El token vive hasta expirar |
 | Eliminación de la columna `password` | ❌ No implementada | [DT-03](TECHNICAL_DEBT_LOG.md#dt-03--columna-password-en-texto-plano-en-el-esquema) |
-| Migración de `config.py` a `.env` | ❌ No implementada | [DT-01](TECHNICAL_DEBT_LOG.md#dt-01--secretos-hardcodeados-en-configpy) |
+| Edición y borrado de productos | ❌ No implementados | Solo alta y consulta; sin `PUT`/`DELETE` |
+| Filtro de disponibilidad y paginación en `GET /products` | ❌ No implementados | [DT-14](TECHNICAL_DEBT_LOG.md#dt-14--el-catálogo-no-distingue-productos-sin-stock-ni-pagina) |
+| Transaccionalidad de orden + stock (RF-03.3) | ❌ No implementada | Falta Unit of Work ([DT-13](TECHNICAL_DEBT_LOG.md#dt-13--createorder-no-es-atómico-dos-transacciones-separadas)) |
+| Análisis SAST automatizado (RNF-02.3) | ❌ No implementado | Sin Bandit ni SonarQube; las guardas de la suite no lo sustituyen |
 | Notificación vía `NotifierPort` (RF-04.1) | ❌ No implementada | Sigue siendo un `print()` ([DT-10](TECHNICAL_DEBT_LOG.md#dt-10--la-notificación-de-orden-sigue-siendo-un-print)) |
 | Contenerización, CI, K8s, observabilidad | ❌ No implementadas | Unidades II–IV; ver [backlog de deuda](TECHNICAL_DEBT_LOG.md#deuda-de-alcance-mayor-ya-registrada-en-el-backlog) |
 
@@ -826,14 +974,19 @@ HTTP Request
      ↓
 Inbound Adapter (auth / order / product controller)
      ↓
-Use Case (AuthenticateUser / CreateOrder / CreateProduct / ListOrders)
+Use Case (AuthenticateUser / CreateOrder / CreateProduct
+          ListOrders / ListProducts)
      ↓
 Output Port (UserRepository / ProductRepository / OrderRepository
              / PasswordHasher / TokenServicePort)
      ↓
 Outbound Adapter (SQLite* / BcryptPasswordHasher / JWTTokenService)
      ↓
-SQLite (orderhub.db) · bcrypt · PyJWT
+SQLite (DATABASE_PATH) · bcrypt · PyJWT
+
+CONFIGURACIÓN (transversal)
+     .env  →  settings.py  →  Container / app.py
+     (ningún secreto literal en el código fuente — RNF-02.1)
 ```
 
 Esta separación mejora, de forma concreta y verificable en este código:
@@ -853,7 +1006,10 @@ Esta separación mejora, de forma concreta y verificable en este código:
   es el único módulo que importa `jwt`.
 * **Evolución futura**: agregar un `NotifierPort` es agregar un port y un
   adaptador nuevos, sin modificar los casos de uso existentes más que para
-  inyectar la nueva dependencia.
+  inyectar la nueva dependencia. RF-02.1 es la comprobación empírica de esa
+  promesa: consultar el catálogo se resolvió con un caso de uso nuevo, un
+  método más en el puerto de productos y una ruta en el controlador que ya
+  existía, **sin tocar el dominio ni ninguna otra capa**.
 
 ---
 
@@ -864,10 +1020,12 @@ Esta separación mejora, de forma concreta y verificable en este código:
 | Directorio | Tests | Qué prueba | Con qué infraestructura |
 | :--- | ---: | :--- | :--- |
 | `tests/unit/domain/` | 10 | Invariantes de `Product` y `Order` | Ninguna |
-| `tests/unit/application/` | 19 | Casos de uso | Dobles en memoria |
-| `tests/unit/adapters/` | 47 | Controladores, decoradores, bcrypt, JWT | Flask de juguete + dobles |
-| `tests/integration/` | 49 | Repositorios, `Container` y flujos HTTP completos | Flask + SQLite reales |
-| **Total** | **125** | | |
+| `tests/unit/application/` | 25 | Casos de uso | Dobles en memoria |
+| `tests/unit/adapters/` | 63 | Controladores, decoradores, bcrypt, JWT | Flask de juguete + dobles |
+| `tests/unit/security/` | 80 | Guardas estáticas de RNF-02.1 y RNF-02.2 | Ninguna (análisis del propio código) |
+| `tests/unit/test_settings.py` | 11 | Configuración por entorno y fallo en producción | `monkeypatch` del entorno |
+| `tests/integration/` | 62 | Repositorios, `Container` y flujos HTTP completos | Flask + SQLite reales |
+| **Total** | **251** | | |
 
 ### 8.2 Aislamiento de la suite de integración
 
@@ -903,6 +1061,28 @@ porque `app.py` no se puede importar desde un test
 | Un `client` recibe 403 (no 401) en `/products` | `test_require_role.py::test_un_client_recibe_403_y_no_401` |
 | Los endpoints protegidos rechazan peticiones sin token | `test_full_flow_http.py::test_los_endpoints_protegidos_rechazan_peticiones_sin_token` |
 | La orden se registra a nombre del dueño del token | `test_full_flow_http.py::test_la_orden_se_registra_a_nombre_del_dueno_del_token` |
+| `GET /products` sin token devuelve 401 | `test_catalog_flow_http.py::test_el_catalogo_exige_token` |
+
+### 8.4 Guardas estáticas: seguridad que no depende de recordar revisarla
+
+Los tests de 8.3 prueban los caminos que **hoy** existen. No dicen nada de una
+consulta SQL escrita mañana en un archivo nuevo, ni de un secreto que alguien
+vuelva a pegar en el código. `tests/unit/security/` cubre ese hueco analizando
+el propio repositorio en cada ejecución de la suite:
+
+| Guarda | Qué hace | Requisito |
+| :--- | :--- | :--- |
+| [`test_sql_queries_are_parameterized.py`](../tests/unit/security/test_sql_queries_are_parameterized.py) | Recorre el **AST de todos los `.py`** del proyecto —el hexagonal y el legado de la raíz— y falla si una cadena con forma de SQL se construye por f-string, `+`, `%` o `.format()` | RNF-02.2 |
+| [`test_no_hardcoded_secrets.py`](../tests/unit/security/test_no_hardcoded_secrets.py) | Falla si `config.py` reaparece, si un literal secreto legado vuelve al código, si `.env.example` se rellena con valores, o si `.gitignore` deja de excluir `.env` | RNF-02.1 |
+
+Ambas guardas se prueban a sí mismas: incluyen casos que verifican que el
+detector **sí reconoce** los patrones vulnerables y que el descubrimiento de
+archivos no está vacío. Una guarda que no analiza nada pasaría siempre, y eso
+sería peor que no tenerla.
+
+> **Lo que estas guardas no son.** No sustituyen a una herramienta SAST real
+> (Bandit, SonarQube): cubren dos patrones concretos, no el OWASP Top 10
+> completo. RNF-02.3 sigue pendiente.
 
 ---
 
@@ -914,19 +1094,21 @@ Comandos ejecutados sobre el estado actual del código:
 python -m pytest -q
 ```
 
-→ **125 passed**.
+→ **251 passed**.
 
 ```bash
 python -m pytest --cov=orderhub --cov-report=term
 ```
 
-→ **100 % sobre `src/orderhub/`** (438 sentencias, 0 sin cubrir).
+→ **100 % sobre `src/orderhub/`** (486 sentencias, 0 sin cubrir).
 
-Cobertura del código fuente completo (incluyendo los módulos legados de la
-raíz, excluyendo los tests): **86 %** — 438 de 509 sentencias. Las 71 sin cubrir
-son `app.py` (25), `database.py` (41) y `config.py` (5), los tres al 0 % por el
-motivo explicado en
-[DT-06](TECHNICAL_DEBT_LOG.md#dt-06--apppy-no-es-testeable-init_db-en-el-cuerpo-de-módulo).
+Cobertura del proyecto completo, incluyendo los módulos legados de la raíz:
+**95 %** — 1662 de 1743 sentencias. Las 81 sin cubrir son `app.py` (24) y
+`database.py` (47), ambos al 0 % por el motivo explicado en
+[DT-06](TECHNICAL_DEBT_LOG.md#dt-06--apppy-no-es-testeable-init_db-en-el-cuerpo-de-módulo);
+las 10 restantes son ramas de fixtures de la propia suite. `config.py` ya no
+figura porque fue eliminado
+([DT-01](TECHNICAL_DEBT_LOG.md#dt-01--secretos-hardcodeados-en-configpy-resuelta)).
 El umbral exigido por RNF-01.2 es del 80 %.
 
 ```bash
@@ -934,10 +1116,10 @@ flake8 src/orderhub/ tests/
 black --check src/orderhub/ tests/
 ```
 
-→ **Sin ningún hallazgo** en ambos casos (58 archivos verificados por black).
+→ **Sin ningún hallazgo** en ambos casos (68 archivos verificados por black).
 
 Sobre los archivos de la raíz, `black --check` también pasa. `flake8` reporta
-**5 hallazgos, todos `E402` en `app.py`**, estructurales y conservados a
+**6 hallazgos, todos `E402` en `app.py`**, estructurales y conservados a
 propósito sin `# noqa`:
 [DT-08](TECHNICAL_DEBT_LOG.md#dt-08--los-archivos-de-la-raíz-no-pasan-flake8-parcialmente-resuelta).
 
