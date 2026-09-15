@@ -1,87 +1,70 @@
-from flask import Flask, render_template, request, jsonify
-import sqlite3
-import config
-from database import get_db_connection, init_db
+import os
+import sys
 
+from flask import Flask, render_template
+
+from database import init_db
+
+# La nueva arquitectura hexagonal vive en src/; se añade al path mientras el
+# proyecto no esté empaquetado.
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "src"))
+
+from orderhub import settings
+from orderhub.adapters.inbound.http.auth_controller import create_auth_blueprint
+from orderhub.adapters.inbound.http.jwt_required import create_jwt_required
+from orderhub.adapters.inbound.http.order_controller import create_order_blueprint
+from orderhub.adapters.inbound.http.product_controller import create_product_blueprint
+from orderhub.container import Container
+
+# Toda la configuración viene del entorno (.env); ya no hay literales aquí ni
+# en un config.py con secretos. Ver RNF-02.1 y DT-01 en el registro de deuda.
 app = Flask(__name__)
-app.config['SECRET_KEY'] = config.SECRET_KEY
+app.config["SECRET_KEY"] = settings.FLASK_SECRET_KEY
 
-init_db()
+init_db(settings.DATABASE_PATH)
 
-@app.route('/')
-def index():
-    return render_template('index.html')
-# "<h1>Bienvenido a Legacy OrderHub API v1.0</h1><p>Estado del sistema: Producción con Deuda Técnica</p>"
+# Composition Root: se construyen las dependencias y se inyectan en el adaptador HTTP.
+container = Container(database_path=settings.DATABASE_PATH)
 
-@app.route('/login', methods=['POST'])
-def login():
-    data = request.get_json() or {}
-    username = data.get('username')
-    password = data.get('password')
-    
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    
-    query = f"SELECT * FROM users WHERE username = '{username}' AND password = '{password}'"
-    print(f"[LOG LEGADO]: Ejecutando consulta SQL sin sanitizar: {query}")
-    
-    try:
-        user = cursor.execute(query).fetchone()
-        conn.close()
-        if user:
-            return jsonify({"status": "success", "user": dict(user)}), 200
-        return jsonify({"status": "error", "message": "Credenciales inválidas"}), 401
-    except Exception as e:
-        return jsonify({"status": "error", "exception": str(e)}), 500
+# El decorador de autenticación se construye aquí porque depende del
+# TokenServicePort; el Container no conoce Flask.
+jwt_required = create_jwt_required(container.token_service)
 
-@app.route('/create_order', methods=['POST'])
-def create_order():
-    data = request.get_json() or {}
-    user_id = data.get('user_id')
-    product_id = data.get('product_id')
-    quantity = int(data.get('quantity', 1))
-
-    conn = get_db_connection()
-    cursor = conn.cursor()
-
-    product = cursor.execute("SELECT * FROM products WHERE id = ?", (product_id,)).fetchone()
-    if not product:
-        conn.close()
-        return jsonify({"error": "Producto no encontrado"}), 404
-
-    if product['stock'] < quantity:
-        conn.close()
-        return jsonify({"error": "Stock insuficiente"}), 400
-
-    total = product['price'] * quantity
-
-    cursor.execute(
-        "INSERT INTO orders (user_id, product_id, quantity, total, status) VALUES (?, ?, ?, ?, ?)",
-        (user_id, product_id, quantity, total, 'PENDING')
+app.register_blueprint(
+    create_order_blueprint(
+        create_order=container.create_order,
+        list_orders=container.list_orders,
+        jwt_required=jwt_required,
     )
-    order_id = cursor.lastrowid
+)
+app.register_blueprint(
+    create_auth_blueprint(
+        authenticate_user=container.authenticate_user,
+        token_service=container.token_service,
+    )
+)
+app.register_blueprint(
+    create_product_blueprint(
+        create_product=container.create_product,
+        list_products=container.list_products,
+        jwt_required=jwt_required,
+    )
+)
 
-    new_stock = product['stock'] - quantity
-    cursor.execute("UPDATE products SET stock = ? WHERE id = ?", (new_stock, product_id))
-    conn.commit()
-    conn.close()
 
-    print(f"[LOG LEGADO]: Notificando al servicio de correos para la orden ID: {order_id}...")
+@app.route("/")
+def index():
+    return render_template("index.html")
 
-    return jsonify({
-        "message": "Orden creada con éxito",
-        "order_id": order_id,
-        "total": total
-    }), 201
 
-@app.route('/get_all_orders_legacy', methods=['GET'])
-def get_orders():
-    conn = get_db_connection()
-    orders = conn.execute("SELECT * FROM orders").fetchall()
-    conn.close()
-    
-    result = [dict(o) for o in orders]
-    return jsonify(result), 200
+# Respuesta original de "/" antes de servir la plantilla, conservada como
+# referencia histórica del sistema legado:
+#   "<h1>Bienvenido a Legacy OrderHub API v1.0</h1>
+#    <p>Estado del sistema: Producción con Deuda Técnica</p>"
 
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, debug=True)
+# Los endpoints /login, /create_order, /get_all_orders_legacy, POST /products y
+# GET /products fueron migrados a la arquitectura hexagonal y ahora los sirven
+# los blueprints registrados arriba.
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5001, debug=True)

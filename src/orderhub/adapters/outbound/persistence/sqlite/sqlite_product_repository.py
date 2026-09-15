@@ -1,0 +1,74 @@
+import sqlite3
+from dataclasses import replace
+from typing import Callable, List, Optional
+
+from orderhub.application.ports.product_repository import ProductRepository
+from orderhub.domain.entities.product import Product
+
+
+class SQLiteProductRepository(ProductRepository):
+    """Implementación del puerto de productos sobre SQLite.
+
+    Todas las consultas son parametrizadas (RNF-02.2).
+    """
+
+    def __init__(self, connection_factory: Callable[[], sqlite3.Connection]) -> None:
+        self._connection_factory = connection_factory
+
+    def find_by_id(self, product_id: int) -> Optional[Product]:
+        connection = self._connection_factory()
+        try:
+            row = connection.execute(
+                "SELECT id, name, price, stock FROM products WHERE id = ?",
+                (product_id,),
+            ).fetchone()
+        finally:
+            connection.close()
+
+        return self._to_entity(row) if row is not None else None
+
+    def find_all(self) -> List[Product]:
+        """Catálogo completo, ordenado por id para que la salida sea estable."""
+        connection = self._connection_factory()
+        try:
+            rows = connection.execute(
+                "SELECT id, name, price, stock FROM products ORDER BY id"
+            ).fetchall()
+        finally:
+            connection.close()
+
+        return [self._to_entity(row) for row in rows]
+
+    def update_stock(self, product: Product) -> None:
+        connection = self._connection_factory()
+        try:
+            connection.execute(
+                "UPDATE products SET stock = ? WHERE id = ?",
+                (product.stock, product.id),
+            )
+            connection.commit()
+        finally:
+            connection.close()
+
+    def save(self, product: Product) -> Product:
+        connection = self._connection_factory()
+        try:
+            cursor = connection.execute(
+                "INSERT INTO products (name, price, stock) VALUES (?, ?, ?)",
+                (product.name, product.price, product.stock),
+            )
+            connection.commit()
+            new_id = cursor.lastrowid
+        finally:
+            connection.close()
+
+        return replace(product, id=new_id)
+
+    @staticmethod
+    def _to_entity(row: sqlite3.Row) -> Product:
+        return Product(
+            id=row["id"],
+            name=row["name"],
+            price=row["price"],
+            stock=row["stock"],
+        )

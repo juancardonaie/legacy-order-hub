@@ -4,3 +4,13 @@ orderhub.db
 __pycache__
 /__pycache__
 .venv/
+
+# Artefactos de pruebas y cobertura (regenerables)
+.coverage
+.pytest_cache/
+
+# Configuración local con secretos reales (RNF-02.1).
+# .env.example SÍ se versiona; .env nunca.
+.env
+.env.*
+!.env.example
