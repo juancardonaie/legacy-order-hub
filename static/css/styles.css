@@ -1,0 +1,100 @@
+:root {
+    --bg: #f4f4f9;
+    --fg: #222;
+    --card: #fff;
+    --accent: #2f5fb3;
+    --accent-dark: #244a8c;
+    --error: #b3261e;
+    --border: #c9c9d3;
+}
+
+* {
+    box-sizing: border-box;
+}
+
+body {
+    margin: 0;
+    font-family: system-ui, -apple-system, "Segoe UI", Arial, sans-serif;
+    background: var(--bg);
+    color: var(--fg);
+    line-height: 1.4;
+}
+
+.container {
+    max-width: 420px;
+    margin: 0 auto;
+    padding: 24px 16px;
+}
+
+h1 {
+    text-align: center;
+    color: var(--accent);
+}
+
+.card {
+    background: var(--card);
+    padding: 20px;
+    border-radius: 8px;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.1);
+}
+
+.card[hidden],
+.message[hidden] {
+    display: none;
+}
+
+label {
+    display: block;
+    margin: 12px 0 4px;
+    font-weight: 600;
+}
+
+input {
+    width: 100%;
+    padding: 10px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    font-size: 1rem;
+}
+
+input:focus,
+button:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+}
+
+button {
+    width: 100%;
+    margin-top: 16px;
+    padding: 10px;
+    border: 0;
+    border-radius: 4px;
+    background: var(--accent);
+    color: #fff;
+    font-size: 1rem;
+    cursor: pointer;
+}
+
+button:hover:not(:disabled) {
+    background: var(--accent-dark);
+}
+
+button:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
+.message {
+    margin: 12px 0 0;
+    color: var(--error);
+    font-weight: 600;
+}
+
+dt {
+    font-weight: 600;
+    margin-top: 8px;
+}
+
+dd {
+    margin: 0;
+}

@@ -2,7 +2,7 @@
 
 > **Asignatura:** Actualización y Mantenimiento de Software
 > **Punto de partida:** Producción Legada (v1.0.0-legacy) — *Alta Deuda Técnica*
-> **Estado actual:** Arquitectura Hexagonal · Autenticación JWT · Catálogo e inventario · 251 tests
+> **Estado actual:** Arquitectura Hexagonal · Autenticación JWT · Catálogo e inventario · Interfaz web de login · 351 tests
 > **Cobertura de pruebas:** **100 %** en `src/orderhub/` · **95 %** del proyecto completo
 
 ---
@@ -56,7 +56,7 @@ Evolucionar y modernizar la aplicación **Legacy OrderHub** desde su estado mono
 | **Lenguaje / Framework** | Python / Flask Monolítico | ✅ Python 3.9 / Flask 3.1 + Arquitectura Hexagonal | Python 3.11+ / Flask o FastAPI modular |
 | **Base de Datos** | SQLite (SQL concatenado) | 🟡 SQLite con consultas parametrizadas y repositorios | PostgreSQL + ORM (SQLAlchemy / Alembic) |
 | **Seguridad** | Secretos *hardcoded*, contraseñas en claro | ✅ Bcrypt + JWT con expiración + roles + configuración desde `.env` (sin secretos en código) | `.env` / Vault, Hash Bcrypt/Argon2, JWT |
-| **Pruebas** | Ninguna (0 % coverage) | ✅ Pytest — 251 tests, 100 % en `src/orderhub/` | Pytest + Cobertura > 80 % + Mocks de IA |
+| **Pruebas** | Ninguna (0 % coverage) | ✅ Pytest — 351 tests, 100 % en `src/orderhub/` | Pytest + Cobertura > 80 % + Mocks de IA |
 | **Calidad de código** | Sin linters | ✅ `flake8` + `black` limpios en `src/` y `tests/` | Linters + SAST en CI |
 | **Infraestructura** | Ejecución local/servidor directo | ❌ Sin cambios | Docker Compose + Kubernetes (Minikube/k3s) |
 | **CI / CD** | Despliegue manual | ❌ Sin cambios | GitHub Actions / GitLab CI + SonarQube |
@@ -78,7 +78,7 @@ Estas eran las áreas críticas detectadas en la auditoría inicial (HU-01). El 
 | **Código acoplado (*spaghetti*)** — `/create_order` mezclaba HTTP, cálculo de negocio y SQL en una sola función. | ✅ **Resuelto.** Separado en controlador HTTP → caso de uso → repositorio. |
 | **Credenciales de BD expuestas en `config.py`.** | ✅ **Resuelto.** `config.py` fue eliminado; toda la configuración se lee del entorno en `src/orderhub/settings.py`, alimentado por un `.env` que no se versiona. Ver [DT-01](docs/TECHNICAL_DEBT_LOG.md). |
 | **Falta de atomicidad transaccional** — el guardado de la orden y el descuento de stock ocurren en transacciones separadas. | 🔴 **Abierto.** Si falla el descuento de stock, la orden queda registrada igualmente (RF-03.3). Ver [DT-13](docs/TECHNICAL_DEBT_LOG.md#dt-13--createorder-no-es-atómico-dos-transacciones-separadas). |
-| **Configuración rígida** — `debug=True` y puerto fijo en el código. | 🔴 **Abierto.** `app.py` sigue con `debug=True` y `port=5001` cableados. |
+| **Configuración rígida** — `debug=True` y puerto fijo en el código. | 🟡 **Parcial.** `debug` se controla con `APP_DEBUG` (apagado por defecto) y el servidor escucha solo en `127.0.0.1` ([DT-18](docs/TECHNICAL_DEBT_LOG.md)). El puerto `5001` sigue fijo. |
 
 ---
 
@@ -86,7 +86,7 @@ Estas eran las áreas críticas detectadas en la auditoría inicial (HU-01). El 
 
 | Método | Ruta | Autenticación | Rol exigido | Descripción |
 | :--- | :--- | :--- | :--- | :--- |
-| `GET` | `/` | ❌ **Público** | — | Panel HTML de monitoreo |
+| `GET` | `/` | ❌ **Público** | — | Interfaz web (login y vista protegida) |
 | `POST` | `/login` | ❌ **Público** | — | Valida credenciales y **devuelve un JWT** |
 | `POST` | `/create_order` | ✅ Token requerido | Cualquiera autenticado | Crea una orden y descuenta stock |
 | `GET` | `/get_all_orders_legacy` | ✅ Token requerido | Cualquiera autenticado | Lista todas las órdenes |
@@ -95,7 +95,7 @@ Estas eran las áreas críticas detectadas en la auditoría inicial (HU-01). El 
 
 Códigos de error relevantes: **401** si falta el token, está expirado o la firma no es válida; **403** si el token es válido pero el rol no basta; **404** si el producto no existe; **400** si el stock solicitado supera el disponible (RF-02.3).
 
-> ⚠️ El panel HTML (`GET /`) carga correctamente, pero su botón «Cargar Órdenes» no envía la cabecera `Authorization` y por tanto recibe un `401`. Es una limitación conocida y documentada: ver [DT-05](docs/TECHNICAL_DEBT_LOG.md).
+> La interfaz web vive en `static/` y es un **cliente HTTP externo** de la API: no forma parte de la arquitectura hexagonal (`src/orderhub/` no la conoce). Hoy solo ofrece login y una vista protegida mínima; productos y órdenes se usan por API. Limitaciones: [DT-16](docs/TECHNICAL_DEBT_LOG.md) (token en `sessionStorage`) y [DT-17](docs/TECHNICAL_DEBT_LOG.md) (sin pruebas de JS).
 
 ### Cómo autenticarse
 
@@ -223,7 +223,11 @@ python -c "import secrets; print(secrets.token_urlsafe(48))"
 python app.py
 ```
 
-La API estará disponible en **http://localhost:5001**. La base de datos SQLite (`orderhub.db`) y sus datos de ejemplo se crean automáticamente en el primer arranque.
+La aplicación estará disponible en **http://127.0.0.1:5001** (solo loopback). La base de datos SQLite (`orderhub.db`) y sus datos de ejemplo se crean automáticamente en el primer arranque.
+
+El modo debug de Flask (recarga y depurador de Werkzeug) está **apagado por defecto**. Para activarlo solo en tu máquina, define `APP_DEBUG=1` en `.env` o en el entorno (ver `.env.example`). No lo actives fuera de local: el depurador permite ejecutar código.
+
+**Usar la interfaz web:** abre http://127.0.0.1:5001/ , inicia sesión con el usuario de prueba del seed (`admin` o `juan`; sus contraseñas de demostración están en `database.py` y en la sección de ejemplos de `curl` de este README, nunca en la UI) y verás tu usuario, rol y hasta cuándo es válida la sesión. «Cerrar sesión» borra el token en el navegador; el servidor no revoca tokens.
 
 ---
 
@@ -247,7 +251,7 @@ Con reporte de cobertura:
 pytest --cov=orderhub --cov-report=term-missing
 ```
 
-La suite tiene **251 tests** organizados por capa: `tests/unit/domain/`, `tests/unit/application/`, `tests/unit/adapters/`, `tests/unit/security/` y `tests/integration/`. Los tests de integración usan Flask y SQLite reales, cada uno contra una base temporal aislada — nunca tocan `orderhub.db`.
+La suite tiene **351 tests** organizados por capa: `tests/unit/domain/`, `tests/unit/application/`, `tests/unit/adapters/`, `tests/unit/security/` y `tests/integration/`. Los tests de integración usan Flask y SQLite reales, cada uno contra una base temporal aislada — nunca tocan `orderhub.db`.
 
 `tests/unit/security/` contiene dos **guardas estáticas** que analizan el propio repositorio en cada ejecución: una falla si alguna consulta SQL se construye por concatenación en lugar de con parámetros (RNF-02.2), y la otra si reaparece un secreto en el código fuente o si `.env` deja de estar ignorado (RNF-02.1).
 

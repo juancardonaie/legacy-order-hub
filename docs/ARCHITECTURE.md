@@ -60,7 +60,7 @@ Toda la lógica vive en `src/orderhub/`, siguiendo Arquitectura Hexagonal.
   `TokenServicePort` y su adaptador `JWTTokenService` (RF-01.3, sección 4).
 * **Autorización por rol** mediante los decoradores `jwt_required` y
   `require_role`, aplicados sobre las vistas HTTP (RF-01.4, sección 5).
-* **Cinco endpoints de API** más el panel HTML: `POST /login`,
+* **Cinco endpoints de API** más la interfaz web de login (`static/`): `POST /login`,
   `POST /create_order`, `GET /get_all_orders_legacy`, `POST /products` y
   `GET /products` (sección 5.3).
 * **Catálogo e inventario (RF-02)**: consulta del catálogo con precio y stock
@@ -72,7 +72,7 @@ Toda la lógica vive en `src/orderhub/`, siguiendo Arquitectura Hexagonal.
 * **Cero secretos en el código fuente**: toda la configuración se lee del
   entorno en `src/orderhub/settings.py`, alimentado por un `.env` que no se
   versiona. `config.py` fue eliminado (RNF-02.1, sección 3.5).
-* **251 tests** (unitarios y de integración) con **100 % de cobertura sobre
+* **351 tests** (unitarios y de integración) con **100 % de cobertura sobre
   `src/orderhub/`** (sección 9).
 
 `database.py` se mantiene solo para el *bootstrap* del esquema y una migración
@@ -83,10 +83,10 @@ mínima; ya no se importa `get_db_connection` desde `app.py`.
 Esto es importante para no dar una imagen más avanzada de la que realmente
 tiene el proyecto:
 
-* **No hay interfaz gráfica de login.** El panel `templates/index.html` no
-  tiene formulario de autenticación y, en consecuencia, su botón de consulta
-  recibe hoy un `401` (decisión documentada en
-  [DT-05](TECHNICAL_DEBT_LOG.md#dt-05--el-panel-html-no-envía-el-token)).
+* **La interfaz web es mínima.** Solo existen el login y una vista protegida
+  que muestra usuario, rol y expiración de la sesión (sección 3.6). No hay UI
+  de productos ni de órdenes, y el JS no tiene pruebas automáticas
+  ([DT-17](TECHNICAL_DEBT_LOG.md#dt-17--la-ui-no-tiene-pruebas-automáticas-de-javascript)).
 * **No hay refresh tokens ni revocación.** El token es de un solo uso hasta que
   expira; no existe *logout* del lado del servidor ni lista de revocación.
 * **No hay registro de usuarios.** Los usuarios se siembran en `database.py`;
@@ -137,8 +137,10 @@ legacy-order-hub/
 ├── requirements-dev.txt            # pytest, pytest-cov, flake8, black
 ├── setup.cfg                       # Configuración de flake8 (max-line-length = 88)
 ├── pytest.ini                      # pythonpath = src ; testpaths = tests
-├── templates/
-│   └── index.html                  # Panel HTML de monitoreo servido por "/" — ver DT-05
+├── static/                         # UI: cliente HTTP externo, NO parte del hexágono
+│   ├── index.html                  # Login + vista protegida, servido por "/"
+│   ├── css/styles.css
+│   └── js/                         # Módulos ES: main, ui, auth, api, session
 ├── docs/
 │   ├── ANALYSIS_AND_REQUIREMENTS.md
 │   ├── ARCHITECTURE.md             # Este documento
@@ -241,17 +243,17 @@ flowchart TB
 
     subgraph sistema ["Legacy OrderHub"]
         direction TB
-        panel["<b>Panel de monitoreo</b><br/>[Contenedor: HTML + JavaScript]<br/><br/>templates/index.html<br/>Servido por GET /"]
+        panel["<b>Interfaz web</b><br/>[Contenedor: HTML + JavaScript]<br/><br/>static/ — login y vista protegida<br/>Servida por GET /, mismo origen"]
         api["<b>API Flask</b><br/>[Contenedor: Python 3.9 + Flask]<br/><br/>app.py — proceso único, puerto 5001<br/>Arquitectura hexagonal en src/orderhub/<br/>Emite y verifica JWT (HS256)<br/>Configuración desde .env (RNF-02.1)"]
         db[("<b>Base de datos</b><br/>[Contenedor: SQLite]<br/><br/>Ruta en DATABASE_PATH — fichero local<br/>Tablas: users, products, orders")]
     end
 
     admin -->|"POST /login, POST /products,<br/>GET /products, POST /create_order · JSON"| api
     cliente -->|"POST /login, GET /products,<br/>POST /create_order · JSON"| api
-    admin -->|"Abre el panel · HTTP"| panel
-    cliente -->|"Abre el panel · HTTP"| panel
+    admin -->|"Abre la interfaz · HTTP"| panel
+    cliente -->|"Abre la interfaz · HTTP"| panel
 
-    panel -.->|"GET /get_all_orders_legacy<br/>SIN cabecera Authorization<br/>→ recibe 401 (DT-05)"| api
+    panel -->|"POST /login · fetch<br/>Authorization: Bearer en el resto"| api
     api -->|"Lee y escribe · sqlite3,<br/>consultas parametrizadas"| db
 
     classDef persona fill:#08427b,stroke:#052e56,color:#ffffff
@@ -262,13 +264,13 @@ flowchart TB
     class admin,cliente persona
     class api contenedor
     class db almacen
-    class panel roto
+    class panel contenedor
 ```
 
 > **Lo que este diagrama NO muestra porque no existe:** no hay PostgreSQL, ni
 > Redis, ni contenedores Docker, ni balanceador, ni servidor WSGI de
 > producción. La aplicación corre con el servidor de desarrollo de Flask
-> (`app.run(host="0.0.0.0", port=5001, debug=True)`, `app.py:65`) y la
+> (`app.run(host="127.0.0.1", port=5001, debug=_debug_enabled())`, `app.py:80`) y la
 > persistencia es un fichero SQLite en el disco local.
 
 ### 2.4 Capas y dirección de dependencias
@@ -537,6 +539,34 @@ flowchart TD
 
 ---
 
+### 3.6 Interfaz web (`static/`): cliente externo, fuera del hexágono
+
+La UI vive en [`static/`](../static/) y es un **cliente HTTP más** del
+adaptador inbound, igual que `curl`. No es una capa de la arquitectura
+hexagonal: `src/orderhub/` no la importa ni la conoce.
+
+| Archivo | Responsabilidad |
+| :--- | :--- |
+| `static/index.html` | Estructura de las dos vistas (login y sesión) y CSP `default-src 'self'` |
+| `static/js/main.js` | Arranque, eventos y temporizador de expiración |
+| `static/js/ui.js` | Render con `textContent`; sin lógica de negocio |
+| `static/js/auth.js` | `login()` y `logout()` (este último solo borra el token en cliente) |
+| `static/js/api.js` | `fetch` con `Authorization: Bearer`; un `401` autenticado limpia la sesión, un `403` no |
+| `static/js/session.js` | `sessionStorage` y lectura de `exp` (solo para UX; la firma la valida el backend) |
+
+**Único punto de contacto con el backend:** `app.py` sirve `static/` (Flask lo
+expone en `/static/*` por defecto) y la ruta `/` entrega `index.html`. Al ser el
+mismo origen no hace falta CORS ni proxy.
+
+**Reglas para conservar la separación:** ningún archivo de `src/orderhub/`
+referencia `static/`; cualquier cambio de backend para la UI va en `app.py` o en
+un adaptador inbound con su caso de uso, nunca en `domain/` ni `application/`;
+no se escriben credenciales ni secretos en la UI. Riesgos asumidos:
+[DT-16](TECHNICAL_DEBT_LOG.md#dt-16--el-token-vive-en-sessionstorage) y
+[DT-17](TECHNICAL_DEBT_LOG.md#dt-17--la-ui-no-tiene-pruebas-automáticas-de-javascript).
+
+---
+
 ## 4. Autenticación (RF-01.2, RF-01.3)
 
 ### 4.1 Dónde está cada pieza
@@ -732,10 +762,10 @@ método: leer el catálogo basta con estar autenticado; **modificarlo** exige
 `admin`. Se exige token —y no acceso público— por coherencia con el resto de la
 API: el catálogo expone el stock, que es información de negocio.
 
-**Por qué `GET /` es público:** es el panel HTML de monitoreo, no una operación
-sobre datos. Sirve la plantilla y nada más; los datos que intenta pintar sí
-están protegidos — de hecho, esa llamada AJAX recibe hoy un 401
-([DT-05](TECHNICAL_DEBT_LOG.md#dt-05--el-panel-html-no-envía-el-token)).
+**Por qué `GET /` es público:** entrega la interfaz web (`static/index.html`),
+no una operación sobre datos. Los datos que la UI consume siguen protegidos
+por `@jwt_required`; la UI solo puede leerlos tras un login real
+([DT-05](TECHNICAL_DEBT_LOG.md#dt-05--el-panel-html-no-envía-el-token-resuelta)).
 
 ### 5.4 El `user_id` se toma del token, nunca del cuerpo
 
@@ -936,7 +966,7 @@ del JSON de la API HTTP.
 | PEP 8 en los archivos de la raíz | ⚠️ Parcial | `E501` resueltos; quedan 6 `E402` estructurales en `app.py` ([DT-08](TECHNICAL_DEBT_LOG.md#dt-08--los-archivos-de-la-raíz-no-pasan-flake8-parcialmente-resuelta)) |
 | Unicidad de `users.username` | ✅ Implementada | `UNIQUE` en el esquema + índice único para bases existentes ([DT-09](TECHNICAL_DEBT_LOG.md#dt-09--el-esquema-no-tiene-restricciones-de-integridad-parcialmente-resuelta)) |
 | Claves foráneas y `NOT NULL` en el esquema | ❌ No implementadas | Requiere recrear tablas ([DT-09](TECHNICAL_DEBT_LOG.md#dt-09--el-esquema-no-tiene-restricciones-de-integridad-parcialmente-resuelta)) |
-| Interfaz gráfica de login | ❌ No implementada | El panel no envía token ([DT-05](TECHNICAL_DEBT_LOG.md#dt-05--el-panel-html-no-envía-el-token)) |
+| Interfaz gráfica de login | ✅ Implementada | `static/`: login, vista protegida y logout en cliente ([DT-05](TECHNICAL_DEBT_LOG.md#dt-05--el-panel-html-no-envía-el-token-resuelta), [DT-16](TECHNICAL_DEBT_LOG.md#dt-16--el-token-vive-en-sessionstorage)) |
 | Registro de usuarios por API | ❌ No implementado | Los usuarios se siembran en `database.py` |
 | Refresh token / revocación / logout | ❌ No implementado | El token vive hasta expirar |
 | Eliminación de la columna `password` | ❌ No implementada | [DT-03](TECHNICAL_DEBT_LOG.md#dt-03--columna-password-en-texto-plano-en-el-esquema) |
@@ -1022,10 +1052,10 @@ Esta separación mejora, de forma concreta y verificable en este código:
 | `tests/unit/domain/` | 10 | Invariantes de `Product` y `Order` | Ninguna |
 | `tests/unit/application/` | 25 | Casos de uso | Dobles en memoria |
 | `tests/unit/adapters/` | 63 | Controladores, decoradores, bcrypt, JWT | Flask de juguete + dobles |
-| `tests/unit/security/` | 80 | Guardas estáticas de RNF-02.1 y RNF-02.2 | Ninguna (análisis del propio código) |
+| `tests/unit/security/` | 171 | Guardas estáticas de RNF-02.1, RNF-02.2 y de la UI (`static/`) | Ninguna (análisis del propio código) |
 | `tests/unit/test_settings.py` | 11 | Configuración por entorno y fallo en producción | `monkeypatch` del entorno |
-| `tests/integration/` | 62 | Repositorios, `Container` y flujos HTTP completos | Flask + SQLite reales |
-| **Total** | **251** | | |
+| `tests/integration/` | 71 | Repositorios, `Container` y flujos HTTP completos | Flask + SQLite reales |
+| **Total** | **351** | | |
 
 ### 8.2 Aislamiento de la suite de integración
 
@@ -1094,7 +1124,7 @@ Comandos ejecutados sobre el estado actual del código:
 python -m pytest -q
 ```
 
-→ **251 passed**.
+→ **351 passed**.
 
 ```bash
 python -m pytest --cov=orderhub --cov-report=term
@@ -1103,7 +1133,7 @@ python -m pytest --cov=orderhub --cov-report=term
 → **100 % sobre `src/orderhub/`** (486 sentencias, 0 sin cubrir).
 
 Cobertura del proyecto completo, incluyendo los módulos legados de la raíz:
-**95 %** — 1662 de 1743 sentencias. Las 81 sin cubrir son `app.py` (24) y
+**95 %** — 1731 de 1814 sentencias. Las 83 sin cubrir son `app.py` (26) y
 `database.py` (47), ambos al 0 % por el motivo explicado en
 [DT-06](TECHNICAL_DEBT_LOG.md#dt-06--apppy-no-es-testeable-init_db-en-el-cuerpo-de-módulo);
 las 10 restantes son ramas de fixtures de la propia suite. `config.py` ya no
