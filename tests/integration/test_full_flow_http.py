@@ -179,8 +179,10 @@ def test_crear_un_producto_con_datos_invalidos_devuelve_400_y_no_toca_la_bd(
     assert connection.execute("SELECT COUNT(*) c FROM products").fetchone()["c"] == 2
 
 
-def test_el_panel_html_responde_200_sin_token(http):
+def test_la_interfaz_responde_200_sin_token(http):
     response = http.get("/")
 
     assert response.status_code == 200
     assert "text/html" in response.headers["Content-Type"]
+    assert b'id="login-form"' in response.data
+    response.close()

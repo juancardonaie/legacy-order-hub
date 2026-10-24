@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'">
+    <title>Legacy OrderHub</title>
+    <link rel="stylesheet" href="/static/css/styles.css">
+</head>
+<body>
+    <main id="app" class="container">
+        <h1>Legacy OrderHub</h1>
+
+        <section id="login-view" class="card" hidden>
+            <h2>Iniciar sesión</h2>
+            <form id="login-form" novalidate>
+                <label for="username">Usuario</label>
+                <input id="username" name="username" type="text"
+                       autocomplete="username" required>
+
+                <label for="password">Contraseña</label>
+                <input id="password" name="password" type="password"
+                       autocomplete="current-password" required>
+
+                <button id="login-button" type="submit">Entrar</button>
+            </form>
+            <p id="login-message" class="message" role="alert" hidden></p>
+        </section>
+
+        <section id="protected-view" class="card" hidden>
+            <h2>Sesión iniciada</h2>
+            <dl>
+                <dt>Usuario</dt>
+                <dd id="user-name"></dd>
+                <dt>Rol</dt>
+                <dd id="user-role"></dd>
+                <dt>Sesión válida hasta</dt>
+                <dd id="session-expiry"></dd>
+            </dl>
+            <button id="logout-button" type="button">Cerrar sesión</button>
+            <div id="explorer" class="explorer"></div>
+        </section>
+    </main>
+
+    <script type="module" src="/static/js/main.js"></script>
+</body>
+</html>
