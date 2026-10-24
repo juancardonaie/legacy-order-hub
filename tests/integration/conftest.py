@@ -19,7 +19,7 @@ import sqlite3
 
 import bcrypt
 import pytest
-from flask import Flask, render_template
+from flask import Flask
 
 from orderhub.adapters.inbound.http.auth_controller import create_auth_blueprint
 from orderhub.adapters.inbound.http.jwt_required import create_jwt_required
@@ -140,11 +140,11 @@ def integration_app(container) -> Flask:
     """
     import os
 
-    templates = os.path.join(
+    static = os.path.join(
         os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-        "templates",
+        "static",
     )
-    app = Flask(__name__, template_folder=templates)
+    app = Flask(__name__, static_folder=static)
     app.testing = True
 
     jwt_required = create_jwt_required(container.token_service)
@@ -172,7 +172,7 @@ def integration_app(container) -> Flask:
 
     @app.route("/")
     def index():
-        return render_template("index.html")
+        return app.send_static_file("index.html")
 
     return app
 

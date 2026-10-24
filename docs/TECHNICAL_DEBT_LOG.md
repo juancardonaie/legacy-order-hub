@@ -35,7 +35,7 @@ de:
 | [DT-02](#dt-02--valor-por-defecto-inseguro-de-jwt_secret_key-resuelta) | Default inseguro de `JWT_SECRET_KEY` | ✅ Resuelta | RNF-02.1 |
 | [DT-03](#dt-03--columna-password-en-texto-plano-en-el-esquema) | Columna `password` en texto plano | 🟡 Diferida | RF-01.2 |
 | [DT-04](#dt-04--comentario-desactualizado-en-databasepy-resuelta) | Comentario desactualizado en `database.py` | ✅ Resuelta | RNF-01.3 |
-| [DT-05](#dt-05--el-panel-html-no-envía-el-token) | Panel HTML roto tras exigir token | 🟡 Diferida | RF-01.3 |
+| [DT-05](#dt-05--el-panel-html-no-envía-el-token-resuelta) | Panel HTML roto tras exigir token | ✅ Resuelta | RF-01.3 |
 | [DT-06](#dt-06--apppy-no-es-testeable-init_db-en-el-cuerpo-de-módulo) | `app.py` no es testeable | 🟡 Diferida | RNF-01.2 |
 | [DT-07](#dt-07--el-esquema-sql-está-duplicado-en-los-tests) | Esquema SQL duplicado en tests | 🔴 Abierta | RNF-01.2 |
 | [DT-08](#dt-08--los-archivos-de-la-raíz-no-pasan-flake8-parcialmente-resuelta) | Archivos de la raíz no pasan flake8 | 🟡 Parcial | RNF-01.3 |
@@ -46,6 +46,11 @@ de:
 | [DT-13](#dt-13--createorder-no-es-atómico-dos-transacciones-separadas) | `CreateOrder` no es atómico | 🔴 Abierta | RF-03.3 |
 | [DT-14](#dt-14--el-catálogo-no-distingue-productos-sin-stock-ni-pagina) | `GET /products` sin filtro ni paginación | 🔴 Abierta | RF-02.1 |
 | [DT-15](#dt-15--databasepy-siembra-datos-de-prueba-en-cualquier-entorno) | `init_db()` siembra datos de prueba siempre | 🔴 Abierta | RNF-02.1 |
+| [DT-16](#dt-16--el-token-vive-en-sessionstorage) | Token JWT en `sessionStorage` (riesgo XSS aceptado) | 🟡 Diferida | RF-01.3 |
+| [DT-17](#dt-17--la-ui-no-tiene-pruebas-automáticas-de-javascript) | La UI no tiene pruebas automáticas de JS | 🔴 Abierta | RNF-01.2 |
+| [DT-18](#dt-18--debugtrue-con-host-0000-resuelta) | `debug=True` con `host="0.0.0.0"` | ✅ Resuelta | RNF-02.1 |
+| [DT-19](#dt-19--get_all_orders_legacy-devuelve-las-órdenes-de-todos-los-usuarios) | `GET /get_all_orders_legacy` expone órdenes de todos | 🔴 Abierta | RF-03.4 |
+| [DT-20](#dt-20--formatos-de-error-inconsistentes-entre-endpoints) | Formatos de error inconsistentes | 🔴 Abierta | — |
 
 ---
 
@@ -239,48 +244,31 @@ DT-03.
 
 ---
 
-## DT-05 — El panel HTML no envía el token
+## DT-05 — El panel HTML no envía el token (RESUELTA)
 
-**Estado:** 🟡 Diferida (decisión explícita) · **Requisito:** RF-01.3 · **Severidad:** Media
+**Estado:** ✅ Resuelta · **Requisito:** RF-01.3 · **Severidad:** Media (histórica)
 
-**Qué es.** El panel de monitoreo servido en `GET /` consulta la API sin
-credenciales, contra un endpoint que ahora exige token.
+**Qué era.** El panel de monitoreo servido en `GET /` (`templates/index.html`)
+consultaba `/get_all_orders_legacy` sin cabecera `Authorization`, contra un
+endpoint que desde RF-01.3 exige token. El botón mostraba un `401`.
 
-**Dónde está.** [`templates/index.html:37`](../templates/index.html):
+**Cómo se resolvió.** `templates/index.html` se eliminó por completo y `GET /`
+sirve ahora la interfaz nueva de [`static/`](../static/): pantalla de login,
+vista protegida mínima y un cliente `fetch` ([`static/js/api.js`](../static/js/api.js))
+que añade `Authorization: Bearer <token>`. La UI es un cliente HTTP externo del
+adaptador inbound: no forma parte del hexágono y `src/orderhub/` no cambió.
 
-```javascript
-const response = await fetch('/get_all_orders_legacy');
-```
+**Qué la protege de volver atrás.**
 
-La llamada no incluye cabecera `Authorization`. El endpoint destino está
-protegido con `@jwt_required` desde
-[`order_controller.py:69-70`](../src/orderhub/adapters/inbound/http/order_controller.py).
+| Test | Qué comprueba |
+| :--- | :--- |
+| [`test_static_ui_safety.py`](../tests/unit/security/test_static_ui_safety.py) | `templates/index.html` no existe; la UI no usa `innerHTML`, `eval`, `console.*`, URLs externas ni credenciales del seed |
+| [`test_static_ui_http.py`](../tests/integration/test_static_ui_http.py) | Assets servidos sin token; la API sigue protegida |
+| [`test_full_flow_http.py`](../tests/integration/test_full_flow_http.py) | `GET /` responde 200 sin token y entrega el formulario de login |
 
-**Por qué es deuda.** El panel fue escrito cuando `/get_all_orders_legacy` era
-público. Al implementarse RF-01.3 el contrato del endpoint cambió y el
-consumidor no se actualizó.
-
-**Qué riesgo implica.** Riesgo funcional acotado y conocido: el botón «Cargar
-Órdenes desde la API» mostrará el JSON de error `401` en lugar del listado. No
-hay riesgo de seguridad —el rechazo es precisamente el comportamiento
-correcto— ni afecta a ningún cliente de la API, que sí envía el token.
-
-> **Precisión sobre el alcance del fallo:** el panel **solo** hace esa llamada.
-> No invoca `/create_order` ni envía `user_id` en ningún cuerpo de petición
-> (verificado leyendo el archivo completo: el único `fetch` es el de la línea
-> 37). El único síntoma es que el listado no carga.
->
-> `GET /` en sí **sigue respondiendo 200 sin token** y así se verifica en
-> [`test_full_flow_http.py:182-186`](../tests/integration/test_full_flow_http.py):
-> lo que falla es la llamada AJAX posterior, no la carga de la página.
-
-**Cuál sería la solución.** Añadir al panel un formulario de login que llame a
-`POST /login`, guarde el token devuelto y lo envíe como
-`Authorization: Bearer <token>` en las peticiones posteriores.
-
-**Por qué se difiere.** **Decisión tomada:** queda fuera del alcance de esta
-entrega. El alcance de esta iteración es la API y su seguridad; la interfaz web
-se ajustará posteriormente.
+**Deuda derivada.** La UI trae sus propias limitaciones, registradas aparte:
+[DT-16](#dt-16--el-token-vive-en-sessionstorage) y
+[DT-17](#dt-17--la-ui-no-tiene-pruebas-automáticas-de-javascript).
 
 ---
 
@@ -309,10 +297,10 @@ hay forma de importar el módulo apuntando a otra base.
    módulo llama a init_db() sobre orderhub.db».
 2. **Un fallo en el cableado real de `app.py` no sería detectado.** Si alguien
    olvidara registrar un blueprint, cambiara el orden de los decoradores o
-   rompiera la construcción del `jwt_required` **en `app.py`**, los 123 tests
+   rompiera la construcción del `jwt_required` **en `app.py`**, los 461 tests
    seguirían pasando, porque prueban una copia equivalente del cableado y no el
    cableado real. Esto se refleja en la cobertura: `app.py` está al **0 %**
-   (25 sentencias, 25 sin cubrir).
+   (26 sentencias, 26 sin cubrir).
 
 **Cuál sería la solución.** Refactorizar a una *application factory*:
 `create_app(database_path)` que construya el `Container`, registre los
@@ -321,7 +309,7 @@ instanciación para el arranque real. La fixture de integración pasaría a llam
 a esa misma función con la ruta temporal, eliminando de paso la duplicación.
 
 **Por qué se difiere.** **Decisión tomada:** no se aplica en esta entrega. El
-requisito de cobertura ya se cumple con holgura (87 % del código fuente, 100 %
+requisito de cobertura ya se cumple con holgura (96 % del proyecto completo, 100 %
 en `src/orderhub/`, frente al 80 % exigido) y modificar el punto de entrada
 tiene más riesgo que beneficio en este momento.
 
@@ -776,6 +764,117 @@ se detectó al auditar la configuración, no porque estuviera comprometida.
 la creación del esquema (siempre) de la carga de datos de ejemplo (solo en
 desarrollo). Encaja de forma natural con DT-06, que ya propone sacar `init_db()`
 del cuerpo de módulo de `app.py`.
+
+---
+
+## DT-16 — El token vive en `sessionStorage`
+
+**Estado:** 🟡 Diferida (riesgo aceptado y mitigado) · **Requisito:** RF-01.3 · **Severidad:** Media
+
+**Qué es.** La UI guarda el JWT y el usuario en `sessionStorage`
+([`static/js/session.js`](../static/js/session.js)). Cualquier script que se
+ejecute en la página (XSS) puede leerlo.
+
+**Por qué se aceptó.** El backend devuelve el token en el JSON y espera
+`Authorization: Bearer`; una cookie `HttpOnly` exigiría CSRF y cambios en el
+backend, fuera del alcance. `sessionStorage` se borra al cerrar la pestaña y no
+se comparte entre pestañas.
+
+**Mitigaciones vigentes.** Datos dinámicos solo con `textContent`; sin
+`innerHTML`, `eval`, scripts ni recursos externos; CSP `default-src 'self'` en
+[`static/index.html`](../static/index.html); el token no se escribe en consola,
+logs ni DOM. Una guarda automática (`test_static_ui_safety.py`) impide
+reintroducir esos patrones. El token se borra al cerrar sesión y ante cualquier
+`401` de una petición autenticada.
+
+**Qué sigue abierto.** No hay revocación en el servidor: tras cerrar sesión el
+token sigue siendo válido hasta su `exp` (60 min por defecto). La CSP se
+declara con `<meta>`; una cabecera HTTP sería más robusta.
+
+---
+
+## DT-17 — La UI no tiene pruebas automáticas de JavaScript
+
+**Estado:** 🔴 Abierta · **Requisito:** RNF-01.2 · **Severidad:** Baja
+
+**Qué es.** El JS de [`static/js/`](../static/js/) no se ejecuta en la suite:
+no hay Node ni un runner de JS (decisión de la etapa 1: sin toolchain extra).
+Lo que sí se verifica desde Python es que los archivos existen, se sirven, y no
+contienen patrones inseguros.
+
+**Riesgo.** Un error de lógica en el cliente (por ejemplo, el manejo de la
+expiración o del `401`) no lo detectaría ningún test; solo la prueba manual.
+
+**Sigue vigente con el explorador de API.** El explorador añade lógica de cliente
+(construcción de peticiones, enmascarado del token, manejo de `401`/`403`) que
+tampoco se ejecuta en la suite. Lo que sí se comprueba desde Python: que el
+catálogo `static/endpoints.json` coincide con las rutas reales y con su
+`auth`/`role` ([test_api_explorer_catalog.py](../tests/integration/test_api_explorer_catalog.py)),
+y que la UI no usa patrones inseguros ni `fetch`/`sessionStorage` fuera de
+`api.js`/`session.js`.
+
+**Solución futura.** Añadir un runner ligero (Vitest/Jest o `node --test`) si
+la UI crece.
+
+---
+
+## DT-18 — `debug=True` con `host="0.0.0.0"` (RESUELTA)
+
+**Estado:** ✅ Resuelta · **Requisito:** RNF-02.1 · **Severidad:** Alta (histórica)
+
+**Qué era.** `app.run(host="0.0.0.0", port=5001, debug=True)` exponía el
+depurador de Werkzeug —que permite ejecutar código— en todas las interfaces de
+red, justo cuando el login real vuelve la API utilizable.
+
+**Cómo se resolvió.** [`app.py`](../app.py) escucha solo en `127.0.0.1` y
+`debug` depende de la variable de entorno `APP_DEBUG` (`1`, `true` o `yes`),
+apagada por defecto y documentada en [`.env.example`](../.env.example).
+
+**Limitación.** `_debug_enabled()` está en `app.py`, que sigue sin cobertura
+automática ([DT-06](#dt-06--apppy-no-es-testeable-init_db-en-el-cuerpo-de-módulo)).
+Se verificó arrancando la aplicación (`Debug mode: off`, `Running on
+http://127.0.0.1:5001`).
+
+---
+
+## DT-19 — `GET /get_all_orders_legacy` devuelve las órdenes de todos los usuarios
+
+**Estado:** 🔴 Abierta (se decide en otra rama) · **Requisito:** RF-03.4 · **Severidad:** Media
+
+**Qué es.** Cualquier usuario autenticado, también un `client`, recibe las
+órdenes de **todos** los usuarios. [`ListOrders.execute()`](../src/orderhub/application/use_cases/list_orders.py)
+no recibe identidad y el puerto `OrderRepository` solo ofrece `find_all()`.
+El controller solo exige `@jwt_required`
+([`order_controller.py`](../src/orderhub/adapters/inbound/http/order_controller.py)).
+
+**Riesgo.** Un cliente ve compras ajenas (usuario, producto, cantidad y total).
+**[No verificado]** si el comportamiento es intencional: el docstring del
+controller solo dice que basta estar autenticado.
+
+**Solución futura.** Filtrar por identidad del token: `admin` ve todas y `client`
+solo las suyas. Implica un método nuevo en el puerto (`find_by_user_id`), su
+adaptador SQLite, el caso de uso con `user_id` y rol, el controller y tests.
+Cambia el contrato para `client`. El explorador de API lo hace visible, pero no
+lo causa ni lo resuelve.
+
+---
+
+## DT-20 — Formatos de error inconsistentes entre endpoints
+
+**Estado:** 🔴 Abierta · **Requisito:** — · **Severidad:** Baja
+
+**Qué es.** `/login` y `/products` responden `{"status": "error", "message": ...}`,
+mientras `/create_order` responde `{"error": ...}` (con `product_id`,
+`requested` y `available` en el rechazo por stock). Además, los 401 de
+`jwt_required` usan `{status, message}`.
+
+**Riesgo.** Todo cliente de la API (incluido `api.js`, que lee `message` o
+`error`) debe manejar dos formas.
+
+**Solución futura.** Unificar. La opción menos disruptiva es aditiva: añadir
+`message` junto a `error` en `/create_order` sin quitar `error`. Unificar del
+todo rompe el contrato actual y obliga a actualizar los tests de
+`test_order_controller_http.py` y `test_full_flow_http.py`.
 
 ---
 

@@ -1,7 +1,7 @@
 import os
 import sys
 
-from flask import Flask, render_template
+from flask import Flask
 
 from database import init_db
 
@@ -54,11 +54,14 @@ app.register_blueprint(
 
 @app.route("/")
 def index():
-    return render_template("index.html")
+    # La UI (static/) es un cliente HTTP externo del backend: no forma parte
+    # del hexágono. Flask ya sirve static/ en /static/*; aquí solo se entrega
+    # su página de entrada.
+    return app.send_static_file("index.html")
 
 
-# Respuesta original de "/" antes de servir la plantilla, conservada como
-# referencia histórica del sistema legado:
+# Respuesta original de "/" antes de servir la UI, conservada como referencia
+# histórica del sistema legado:
 #   "<h1>Bienvenido a Legacy OrderHub API v1.0</h1>
 #    <p>Estado del sistema: Producción con Deuda Técnica</p>"
 
@@ -66,5 +69,12 @@ def index():
 # GET /products fueron migrados a la arquitectura hexagonal y ahora los sirven
 # los blueprints registrados arriba.
 
+
+def _debug_enabled() -> bool:
+    """APP_DEBUG activa el depurador de Werkzeug. Apagado por defecto (DT-18)."""
+    return os.environ.get("APP_DEBUG", "").strip().lower() in ("1", "true", "yes")
+
+
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5001, debug=True)
+    # Solo loopback: el depurador y la API no deben quedar expuestos en la red.
+    app.run(host="127.0.0.1", port=5001, debug=_debug_enabled())
