@@ -49,6 +49,8 @@ de:
 | [DT-16](#dt-16--el-token-vive-en-sessionstorage) | Token JWT en `sessionStorage` (riesgo XSS aceptado) | 🟡 Diferida | RF-01.3 |
 | [DT-17](#dt-17--la-ui-no-tiene-pruebas-automáticas-de-javascript) | La UI no tiene pruebas automáticas de JS | 🔴 Abierta | RNF-01.2 |
 | [DT-18](#dt-18--debugtrue-con-host-0000-resuelta) | `debug=True` con `host="0.0.0.0"` | ✅ Resuelta | RNF-02.1 |
+| [DT-19](#dt-19--get_all_orders_legacy-devuelve-las-órdenes-de-todos-los-usuarios) | `GET /get_all_orders_legacy` expone órdenes de todos | 🔴 Abierta | RF-03.4 |
+| [DT-20](#dt-20--formatos-de-error-inconsistentes-entre-endpoints) | Formatos de error inconsistentes | 🔴 Abierta | — |
 
 ---
 
@@ -295,7 +297,7 @@ hay forma de importar el módulo apuntando a otra base.
    módulo llama a init_db() sobre orderhub.db».
 2. **Un fallo en el cableado real de `app.py` no sería detectado.** Si alguien
    olvidara registrar un blueprint, cambiara el orden de los decoradores o
-   rompiera la construcción del `jwt_required` **en `app.py`**, los 351 tests
+   rompiera la construcción del `jwt_required` **en `app.py`**, los 461 tests
    seguirían pasando, porque prueban una copia equivalente del cableado y no el
    cableado real. Esto se refleja en la cobertura: `app.py` está al **0 %**
    (26 sentencias, 26 sin cubrir).
@@ -307,7 +309,7 @@ instanciación para el arranque real. La fixture de integración pasaría a llam
 a esa misma función con la ruta temporal, eliminando de paso la duplicación.
 
 **Por qué se difiere.** **Decisión tomada:** no se aplica en esta entrega. El
-requisito de cobertura ya se cumple con holgura (95 % del proyecto completo, 100 %
+requisito de cobertura ya se cumple con holgura (96 % del proyecto completo, 100 %
 en `src/orderhub/`, frente al 80 % exigido) y modificar el punto de entrada
 tiene más riesgo que beneficio en este momento.
 
@@ -803,8 +805,16 @@ contienen patrones inseguros.
 **Riesgo.** Un error de lógica en el cliente (por ejemplo, el manejo de la
 expiración o del `401`) no lo detectaría ningún test; solo la prueba manual.
 
+**Sigue vigente con el explorador de API.** El explorador añade lógica de cliente
+(construcción de peticiones, enmascarado del token, manejo de `401`/`403`) que
+tampoco se ejecuta en la suite. Lo que sí se comprueba desde Python: que el
+catálogo `static/endpoints.json` coincide con las rutas reales y con su
+`auth`/`role` ([test_api_explorer_catalog.py](../tests/integration/test_api_explorer_catalog.py)),
+y que la UI no usa patrones inseguros ni `fetch`/`sessionStorage` fuera de
+`api.js`/`session.js`.
+
 **Solución futura.** Añadir un runner ligero (Vitest/Jest o `node --test`) si
-la UI crece a productos y órdenes.
+la UI crece.
 
 ---
 
@@ -824,6 +834,47 @@ apagada por defecto y documentada en [`.env.example`](../.env.example).
 automática ([DT-06](#dt-06--apppy-no-es-testeable-init_db-en-el-cuerpo-de-módulo)).
 Se verificó arrancando la aplicación (`Debug mode: off`, `Running on
 http://127.0.0.1:5001`).
+
+---
+
+## DT-19 — `GET /get_all_orders_legacy` devuelve las órdenes de todos los usuarios
+
+**Estado:** 🔴 Abierta (se decide en otra rama) · **Requisito:** RF-03.4 · **Severidad:** Media
+
+**Qué es.** Cualquier usuario autenticado, también un `client`, recibe las
+órdenes de **todos** los usuarios. [`ListOrders.execute()`](../src/orderhub/application/use_cases/list_orders.py)
+no recibe identidad y el puerto `OrderRepository` solo ofrece `find_all()`.
+El controller solo exige `@jwt_required`
+([`order_controller.py`](../src/orderhub/adapters/inbound/http/order_controller.py)).
+
+**Riesgo.** Un cliente ve compras ajenas (usuario, producto, cantidad y total).
+**[No verificado]** si el comportamiento es intencional: el docstring del
+controller solo dice que basta estar autenticado.
+
+**Solución futura.** Filtrar por identidad del token: `admin` ve todas y `client`
+solo las suyas. Implica un método nuevo en el puerto (`find_by_user_id`), su
+adaptador SQLite, el caso de uso con `user_id` y rol, el controller y tests.
+Cambia el contrato para `client`. El explorador de API lo hace visible, pero no
+lo causa ni lo resuelve.
+
+---
+
+## DT-20 — Formatos de error inconsistentes entre endpoints
+
+**Estado:** 🔴 Abierta · **Requisito:** — · **Severidad:** Baja
+
+**Qué es.** `/login` y `/products` responden `{"status": "error", "message": ...}`,
+mientras `/create_order` responde `{"error": ...}` (con `product_id`,
+`requested` y `available` en el rechazo por stock). Además, los 401 de
+`jwt_required` usan `{status, message}`.
+
+**Riesgo.** Todo cliente de la API (incluido `api.js`, que lee `message` o
+`error`) debe manejar dos formas.
+
+**Solución futura.** Unificar. La opción menos disruptiva es aditiva: añadir
+`message` junto a `error` en `/create_order` sin quitar `error`. Unificar del
+todo rompe el contrato actual y obliga a actualizar los tests de
+`test_order_controller_http.py` y `test_full_flow_http.py`.
 
 ---
 

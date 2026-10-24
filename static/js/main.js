@@ -2,6 +2,7 @@
 
 import { ApiError } from "./api.js";
 import { login, logout } from "./auth.js";
+import { mountExplorer, unmountExplorer } from "./explorer.js";
 import { clearSession, getExpiryMs, getToken, getUser, hasValidSession } from "./session.js";
 import {
     clearPassword,
@@ -29,12 +30,14 @@ function cancelExpiryTimer() {
 function expireSession() {
     clearSession();
     cancelExpiryTimer();
+    unmountExplorer();
     showLogin("Tu sesión expiró. Inicia sesión de nuevo");
 }
 
 function renderSession() {
     const expiryMs = getExpiryMs(getToken());
     showProtected(getUser(), expiryMs);
+    mountExplorer({ onSessionExpired: expireSession });
 
     cancelExpiryTimer();
     const remaining = Math.min(Math.max(expiryMs - Date.now(), 0), MAX_TIMER_MS);
@@ -71,6 +74,7 @@ async function handleLogin() {
 function handleLogout() {
     logout();
     cancelExpiryTimer();
+    unmountExplorer();
     showLogin();
 }
 

@@ -2,8 +2,8 @@
 
 > **Asignatura:** Actualización y Mantenimiento de Software
 > **Punto de partida:** Producción Legada (v1.0.0-legacy) — *Alta Deuda Técnica*
-> **Estado actual:** Arquitectura Hexagonal · Autenticación JWT · Catálogo e inventario · Interfaz web de login · 351 tests
-> **Cobertura de pruebas:** **100 %** en `src/orderhub/` · **95 %** del proyecto completo
+> **Estado actual:** Arquitectura Hexagonal · Autenticación JWT · Catálogo e inventario · Interfaz web (login y explorador de API) · 461 tests
+> **Cobertura de pruebas:** **100 %** en `src/orderhub/` · **96 %** del proyecto completo
 
 ---
 
@@ -56,7 +56,7 @@ Evolucionar y modernizar la aplicación **Legacy OrderHub** desde su estado mono
 | **Lenguaje / Framework** | Python / Flask Monolítico | ✅ Python 3.9 / Flask 3.1 + Arquitectura Hexagonal | Python 3.11+ / Flask o FastAPI modular |
 | **Base de Datos** | SQLite (SQL concatenado) | 🟡 SQLite con consultas parametrizadas y repositorios | PostgreSQL + ORM (SQLAlchemy / Alembic) |
 | **Seguridad** | Secretos *hardcoded*, contraseñas en claro | ✅ Bcrypt + JWT con expiración + roles + configuración desde `.env` (sin secretos en código) | `.env` / Vault, Hash Bcrypt/Argon2, JWT |
-| **Pruebas** | Ninguna (0 % coverage) | ✅ Pytest — 351 tests, 100 % en `src/orderhub/` | Pytest + Cobertura > 80 % + Mocks de IA |
+| **Pruebas** | Ninguna (0 % coverage) | ✅ Pytest — 461 tests, 100 % en `src/orderhub/` | Pytest + Cobertura > 80 % + Mocks de IA |
 | **Calidad de código** | Sin linters | ✅ `flake8` + `black` limpios en `src/` y `tests/` | Linters + SAST en CI |
 | **Infraestructura** | Ejecución local/servidor directo | ❌ Sin cambios | Docker Compose + Kubernetes (Minikube/k3s) |
 | **CI / CD** | Despliegue manual | ❌ Sin cambios | GitHub Actions / GitLab CI + SonarQube |
@@ -86,7 +86,7 @@ Estas eran las áreas críticas detectadas en la auditoría inicial (HU-01). El 
 
 | Método | Ruta | Autenticación | Rol exigido | Descripción |
 | :--- | :--- | :--- | :--- | :--- |
-| `GET` | `/` | ❌ **Público** | — | Interfaz web (login y vista protegida) |
+| `GET` | `/` | ❌ **Público** | — | Interfaz web (login y explorador de API) |
 | `POST` | `/login` | ❌ **Público** | — | Valida credenciales y **devuelve un JWT** |
 | `POST` | `/create_order` | ✅ Token requerido | Cualquiera autenticado | Crea una orden y descuenta stock |
 | `GET` | `/get_all_orders_legacy` | ✅ Token requerido | Cualquiera autenticado | Lista todas las órdenes |
@@ -95,7 +95,7 @@ Estas eran las áreas críticas detectadas en la auditoría inicial (HU-01). El 
 
 Códigos de error relevantes: **401** si falta el token, está expirado o la firma no es válida; **403** si el token es válido pero el rol no basta; **404** si el producto no existe; **400** si el stock solicitado supera el disponible (RF-02.3).
 
-> La interfaz web vive en `static/` y es un **cliente HTTP externo** de la API: no forma parte de la arquitectura hexagonal (`src/orderhub/` no la conoce). Hoy solo ofrece login y una vista protegida mínima; productos y órdenes se usan por API. Limitaciones: [DT-16](docs/TECHNICAL_DEBT_LOG.md) (token en `sessionStorage`) y [DT-17](docs/TECHNICAL_DEBT_LOG.md) (sin pruebas de JS).
+> La interfaz web vive en `static/` y es un **cliente HTTP externo** de la API: no forma parte de la arquitectura hexagonal (`src/orderhub/` no la conoce). Ofrece login y, tras iniciar sesión, un **explorador de API** ligero (tipo Swagger) para probar los endpoints sin `curl`; no hay pantallas de negocio (tablas, filtros, vistas por rol). Limitaciones: [DT-16](docs/TECHNICAL_DEBT_LOG.md) (token en `sessionStorage`) y [DT-17](docs/TECHNICAL_DEBT_LOG.md) (sin pruebas de JS).
 
 ### Cómo autenticarse
 
@@ -229,6 +229,12 @@ El modo debug de Flask (recarga y depurador de Werkzeug) está **apagado por def
 
 **Usar la interfaz web:** abre http://127.0.0.1:5001/ , inicia sesión con el usuario de prueba del seed (`admin` o `juan`; sus contraseñas de demostración están en `database.py` y en la sección de ejemplos de `curl` de este README, nunca en la UI) y verás tu usuario, rol y hasta cuándo es válida la sesión. «Cerrar sesión» borra el token en el navegador; el servidor no revoca tokens.
 
+**Usar el explorador de API:** tras el login aparece la lista de endpoints (método + ruta). Despliega uno, edita el body JSON si lo tiene y pulsa «Enviar»: verás el código HTTP, el tiempo en ms y la respuesta formateada.
+
+* El token de la sesión se envía solo en los endpoints protegidos. Nunca se muestra: en la respuesta de `POST /login` el campo `token` aparece como `[oculto]`.
+* La casilla «Enviar sin token» permite comprobar el `401`. Un `401` con token vigente se trata como sesión expirada y vuelve al login; un `403` o un error de red no cierran la sesión.
+* La lista de endpoints vive en [`static/endpoints.json`](static/endpoints.json). Al añadir o cambiar un endpoint hay que actualizarla; `tests/integration/test_api_explorer_catalog.py` falla si se desincroniza de las rutas de Flask.
+
 ---
 
 ## Desarrollo: pruebas y calidad de código
@@ -251,7 +257,7 @@ Con reporte de cobertura:
 pytest --cov=orderhub --cov-report=term-missing
 ```
 
-La suite tiene **351 tests** organizados por capa: `tests/unit/domain/`, `tests/unit/application/`, `tests/unit/adapters/`, `tests/unit/security/` y `tests/integration/`. Los tests de integración usan Flask y SQLite reales, cada uno contra una base temporal aislada — nunca tocan `orderhub.db`.
+La suite tiene **461 tests** organizados por capa: `tests/unit/domain/`, `tests/unit/application/`, `tests/unit/adapters/`, `tests/unit/security/` y `tests/integration/`. Los tests de integración usan Flask y SQLite reales, cada uno contra una base temporal aislada — nunca tocan `orderhub.db`.
 
 `tests/unit/security/` contiene dos **guardas estáticas** que analizan el propio repositorio en cada ejecución: una falla si alguna consulta SQL se construye por concatenación en lugar de con parámetros (RNF-02.2), y la otra si reaparece un secreto en el código fuente o si `.env` deja de estar ignorado (RNF-02.1).
 

@@ -5,6 +5,7 @@ const $ = (id) => document.getElementById(id);
 export function showLogin(message = "") {
     $("protected-view").hidden = true;
     $("login-view").hidden = false;
+    $("app").classList.remove("container--wide");
     showMessage(message);
     $("login-form").reset();
 }
@@ -12,6 +13,7 @@ export function showLogin(message = "") {
 export function showProtected(user, expiryMs) {
     $("login-view").hidden = true;
     $("protected-view").hidden = false;
+    $("app").classList.add("container--wide");
     $("user-name").textContent = user.username;
     $("user-role").textContent = user.role;
     $("session-expiry").textContent = new Date(expiryMs).toLocaleTimeString();

@@ -1,15 +1,29 @@
 """La UI estática (static/) se sirve sin token y desde el mismo origen."""
 
+import pathlib
+
 import pytest
 
-ASSETS = [
-    ("/static/js/main.js", "javascript"),
-    ("/static/js/api.js", "javascript"),
-    ("/static/js/auth.js", "javascript"),
-    ("/static/js/session.js", "javascript"),
-    ("/static/js/ui.js", "javascript"),
-    ("/static/css/styles.css", "css"),
-]
+STATIC_DIR = pathlib.Path(__file__).resolve().parents[2] / "static"
+
+TIPOS = {".js": "javascript", ".css": "css", ".json": "json", ".html": "html"}
+
+# Se recorre static/ en vez de mantener una lista a mano: un asset nuevo queda
+# cubierto sin tocar este archivo.
+ASSETS = sorted(
+    (f"/static/{path.relative_to(STATIC_DIR).as_posix()}", TIPOS[path.suffix])
+    for path in STATIC_DIR.rglob("*")
+    if path.suffix in TIPOS
+)
+
+
+def test_el_recorrido_de_static_encuentra_los_assets_esperados():
+    rutas = {ruta for ruta, _ in ASSETS}
+
+    assert "/static/endpoints.json" in rutas
+    assert "/static/js/explorer.js" in rutas
+    assert "/static/js/main.js" in rutas
+    assert "/static/css/styles.css" in rutas
 
 
 @pytest.mark.parametrize("ruta, tipo", ASSETS)
@@ -28,6 +42,16 @@ def test_la_pagina_de_entrada_referencia_assets_que_existen(http):
 
     assert "/static/js/main.js" in html
     assert "/static/css/styles.css" in html
+    assert 'id="explorer"' in html
+
+
+def test_el_catalogo_del_explorador_se_sirve_como_json_valido(http):
+    response = http.get("/static/endpoints.json")
+
+    catalogo = response.get_json()
+    response.close()
+    assert isinstance(catalogo, list)
+    assert len(catalogo) == 5
 
 
 def test_la_api_sigue_protegida_aunque_la_ui_sea_publica(http):

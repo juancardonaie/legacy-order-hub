@@ -1,0 +1,102 @@
+[
+    {
+        "method": "POST",
+        "path": "/login",
+        "summary": "Inicia sesión y devuelve un token JWT.",
+        "auth": false,
+        "role": null,
+        "body_example": {
+            "username": "",
+            "password": ""
+        },
+        "body_fields": [
+            {
+                "name": "username",
+                "type": "string",
+                "required": true,
+                "description": "Nombre de usuario."
+            },
+            {
+                "name": "password",
+                "type": "string",
+                "required": true,
+                "description": "Contraseña del usuario."
+            }
+        ]
+    },
+    {
+        "method": "GET",
+        "path": "/products",
+        "summary": "Lista el catálogo de productos ordenado por id.",
+        "auth": true,
+        "role": null,
+        "body_example": null,
+        "body_fields": []
+    },
+    {
+        "method": "POST",
+        "path": "/products",
+        "summary": "Crea un producto en el catálogo.",
+        "auth": true,
+        "role": "admin",
+        "body_example": {
+            "name": "Producto de prueba",
+            "price": 10.5,
+            "stock": 3
+        },
+        "body_fields": [
+            {
+                "name": "name",
+                "type": "string",
+                "required": true,
+                "description": "Nombre del producto, no vacío."
+            },
+            {
+                "name": "price",
+                "type": "number",
+                "required": true,
+                "description": "Precio unitario, mayor que 0."
+            },
+            {
+                "name": "stock",
+                "type": "integer",
+                "required": false,
+                "description": "Unidades disponibles, 0 o más. Por defecto 0."
+            }
+        ]
+    },
+    {
+        "method": "POST",
+        "path": "/create_order",
+        "summary": "Crea una orden para el usuario del token y descuenta stock.",
+        "auth": true,
+        "role": null,
+        "body_example": {
+            "product_id": 1,
+            "quantity": 1
+        },
+        "body_fields": [
+            {
+                "name": "product_id",
+                "type": "integer",
+                "required": true,
+                "description": "Id de un producto existente."
+            },
+            {
+                "name": "quantity",
+                "type": "integer",
+                "required": false,
+                "description": "Unidades a comprar, mayor que 0. Por defecto 1."
+            }
+        ]
+    },
+    {
+        "method": "GET",
+        "path": "/get_all_orders_legacy",
+        "summary": "Lista las órdenes de todos los usuarios.",
+        "auth": true,
+        "role": null,
+        "body_example": null,
+        "body_fields": []
+    }
+]
