@@ -227,6 +227,31 @@ La aplicación estará disponible en **http://127.0.0.1:5001** (solo loopback). 
 
 El modo debug de Flask (recarga y depurador de Werkzeug) está **apagado por defecto**. Para activarlo solo en tu máquina, define `APP_DEBUG=1` en `.env` o en el entorno (ver `.env.example`). No lo actives fuera de local: el depurador permite ejecutar código.
 
+### Ejecución en producción
+
+El servidor de `python app.py` es solo para desarrollo. En un despliegue se usa gunicorn, que lee [`gunicorn.conf.py`](gunicorn.conf.py) de la raíz:
+
+```bash
+gunicorn app:app
+```
+
+Usa **un solo worker** a propósito: `app.py` ejecuta `init_db()` al importarse (DT-06) y SQLite admite un único escritor. No subas `workers` sin resolver antes esos dos puntos.
+
+Variables de entorno (ver `.env.example`):
+
+| Variable | Obligatoria | Para qué |
+| :--- | :--- | :--- |
+| `APP_ENV` | **Sí** (`production`) | Si falta vale `development`: se siembran usuarios de demostración y se usan secretos de respaldo inseguros. |
+| `JWT_SECRET_KEY`, `FLASK_SECRET_KEY` | **Sí** fuera de `development` | Sin ellas el arranque falla con `MissingConfigurationError`. |
+| `ADMIN_USERNAME`, `ADMIN_PASSWORD` | Sí, para poder entrar | Primer administrador. Se crea al arrancar si no existe; si ya existe no se toca. Se definen siempre juntas y la contraseña (máx. 72 bytes) se guarda con bcrypt. |
+| `PORT` | No | Puerto. Por defecto 5001; las plataformas PaaS lo definen solas. |
+| `APP_HOST` | No | Host. Con gunicorn vale `0.0.0.0` por defecto; con `python app.py`, `127.0.0.1`. Con `APP_DEBUG` solo se admite loopback. |
+| `DATABASE_PATH` | No | Ruta del fichero SQLite (por defecto `orderhub.db`). |
+
+Fuera de `development` **no se siembran** `admin`/`juan` ni los productos de demostración (DT-15): el catálogo empieza vacío y el administrador lo llena con `POST /products`.
+
+> **SQLite y discos efímeros.** Muchos servicios PaaS borran el disco en cada despliegue o reinicio, y con él usuarios, productos y órdenes (el administrador se recrea solo desde `ADMIN_*`). Para conservar los datos hay que montar un disco persistente y apuntar `DATABASE_PATH` a él (por ejemplo `/data/orderhub.db`). Cambiar de base de datos (PostgreSQL, RNF-03) queda fuera de este paso.
+
 **Usar la interfaz web:** abre http://127.0.0.1:5001/ , inicia sesión con el usuario de prueba del seed (`admin` o `juan`; sus contraseñas de demostración están en `database.py` y en la sección de ejemplos de `curl` de este README, nunca en la UI) y verás tu usuario, rol y hasta cuándo es válida la sesión. «Cerrar sesión» borra el token en el navegador; el servidor no revoca tokens.
 
 **Usar el explorador de API:** tras el login aparece la lista de endpoints (método + ruta). Despliega uno, edita el body JSON si lo tiene y pulsa «Enviar»: verás el código HTTP, el tiempo en ms y la respuesta formateada.
