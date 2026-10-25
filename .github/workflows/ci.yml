@@ -1,0 +1,59 @@
+# Integración continua: análisis estático y pruebas (RNF-04.1, RNF-04.2).
+#
+# Se ejecuta en cada push y en cada pull request hacia develop y main. No usa
+# secretos: la suite corre con los valores de desarrollo de settings.py y bases
+# SQLite temporales, nunca con datos reales.
+name: CI
+
+on:
+  push:
+    branches: [develop, main]
+  pull_request:
+    branches: [develop, main]
+
+# Mínimo privilegio: el job solo necesita leer el código.
+permissions:
+  contents: read
+
+# Un push nuevo a la misma rama o PR cancela la ejecución anterior de un PR.
+# En push (develop/main) no se cancela, para que cada commit tenga su CI.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  test:
+    name: Lint y pruebas (Python 3.9)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Descargar el código
+        uses: actions/checkout@v4
+
+      # 3.9 es la versión del .venv local y de requirements.txt.
+      - name: Preparar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.9"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+
+      - name: Instalar dependencias
+        run: python -m pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: flake8
+        run: flake8 .
+
+      - name: black
+        run: black --check -l 88 .
+
+      - name: Pruebas con cobertura
+        run: pytest --cov=src/orderhub --cov=. --cov-report=term-missing
+
+      # El total del proyecto (96 %) incluye app.py y database.py, que no se
+      # pueden importar en tests (DT-06). Lo que se exige es que el código de
+      # src/orderhub/ conserve el 100 %.
+      - name: Cobertura de src/orderhub al 100 %
+        run: coverage report --include="src/orderhub/*" --precision=2 --fail-under=100
