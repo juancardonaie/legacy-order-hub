@@ -21,7 +21,15 @@ from orderhub.container import Container
 app = Flask(__name__)
 app.config["SECRET_KEY"] = settings.FLASK_SECRET_KEY
 
-init_db(settings.DATABASE_PATH)
+# Fuera de development no se siembran usuarios de demostración (DT-15). El primer
+# administrador sale de ADMIN_USERNAME y ADMIN_PASSWORD, que solo se leen aquí y
+# nunca se registran.
+init_db(
+    settings.DATABASE_PATH,
+    app_env=settings.APP_ENV,
+    admin_username=os.environ.get("ADMIN_USERNAME"),
+    admin_password=os.environ.get("ADMIN_PASSWORD"),
+)
 
 # Composition Root: se construyen las dependencias y se inyectan en el adaptador HTTP.
 container = Container(database_path=settings.DATABASE_PATH)
@@ -75,6 +83,31 @@ def _debug_enabled() -> bool:
     return os.environ.get("APP_DEBUG", "").strip().lower() in ("1", "true", "yes")
 
 
+DEFAULT_HOST = "127.0.0.1"
+DEFAULT_PORT = 5001
+LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1")
+
+
+def _server_options() -> dict:
+    """Host, puerto y debug del servidor de desarrollo (`python app.py`).
+
+    Por defecto solo loopback y puerto 5001. APP_HOST y PORT permiten cambiarlos;
+    en producción el servidor es gunicorn (ver gunicorn.conf.py) y esto no se usa.
+    """
+    host = os.environ.get("APP_HOST", "").strip() or DEFAULT_HOST
+    raw_port = os.environ.get("PORT", "").strip() or str(DEFAULT_PORT)
+    try:
+        port = int(raw_port)
+    except ValueError:
+        raise RuntimeError(f"PORT debe ser un entero, no '{raw_port}'") from None
+    debug = _debug_enabled()
+    if debug and host not in LOOPBACK_HOSTS:
+        raise RuntimeError(
+            "APP_DEBUG solo se permite en loopback: el depurador de Werkzeug "
+            f"ejecuta código y APP_HOST es '{host}' (DT-18)"
+        )
+    return {"host": host, "port": port, "debug": debug}
+
+
 if __name__ == "__main__":
-    # Solo loopback: el depurador y la API no deben quedar expuestos en la red.
-    app.run(host="127.0.0.1", port=5001, debug=_debug_enabled())
+    app.run(**_server_options())
