@@ -72,7 +72,7 @@ Toda la lógica vive en `src/orderhub/`, siguiendo Arquitectura Hexagonal.
 * **Cero secretos en el código fuente**: toda la configuración se lee del
   entorno en `src/orderhub/settings.py`, alimentado por un `.env` que no se
   versiona. `config.py` fue eliminado (RNF-02.1, sección 3.5).
-* **461 tests** (unitarios y de integración) con **100 % de cobertura sobre
+* **516 tests** (unitarios y de integración) con **100 % de cobertura sobre
   `src/orderhub/`** (sección 9).
 
 `database.py` se mantiene solo para el *bootstrap* del esquema y una migración
@@ -188,11 +188,12 @@ legacy-order-hub/
     ├── conftest.py                 # Fixtures comunes (identidades, helper Bearer)
     ├── unit/
     │   ├── test_settings.py        # 11 tests (configuración por entorno)
+    │   ├── test_deploy_config.py   # 5 tests (.python-version, CI y requirements.txt coherentes)
     │   ├── domain/                 # 10 tests
     │   ├── application/            # 25 tests
     │   ├── adapters/               # 63 tests
-    │   └── security/               # 243 tests (guardas RNF-02.1, RNF-02.2 y de la UI)
-    └── integration/                # 109 tests (Flask + SQLite reales)
+    │   └── security/               # 247 tests (guardas RNF-02.1, RNF-02.2 y de la UI)
+    └── integration/                # 155 tests (Flask + SQLite reales, database.py y app.py)
 ```
 
 ### 2.2 Diagrama C4 — Nivel 1: Contexto
@@ -244,7 +245,7 @@ flowchart TB
     subgraph sistema ["Legacy OrderHub"]
         direction TB
         panel["<b>Interfaz web</b><br/>[Contenedor: HTML + JavaScript]<br/><br/>static/ — login y explorador de API<br/>Servida por GET /, mismo origen"]
-        api["<b>API Flask</b><br/>[Contenedor: Python 3.9 + Flask]<br/><br/>app.py — proceso único, puerto 5001<br/>Arquitectura hexagonal en src/orderhub/<br/>Emite y verifica JWT (HS256)<br/>Configuración desde .env (RNF-02.1)"]
+        api["<b>API Flask</b><br/>[Contenedor: Python 3.9 + Flask]<br/><br/>app.py — proceso único (en producción: gunicorn, 1 worker, puerto PORT), 5001 en local<br/>Arquitectura hexagonal en src/orderhub/<br/>Emite y verifica JWT (HS256)<br/>Configuración desde .env (RNF-02.1)"]
         db[("<b>Base de datos</b><br/>[Contenedor: SQLite]<br/><br/>Ruta en DATABASE_PATH — fichero local<br/>Tablas: users, products, orders")]
     end
 
@@ -268,10 +269,11 @@ flowchart TB
 ```
 
 > **Lo que este diagrama NO muestra porque no existe:** no hay PostgreSQL, ni
-> Redis, ni contenedores Docker, ni balanceador, ni servidor WSGI de
-> producción. La aplicación corre con el servidor de desarrollo de Flask
-> (`app.run(host="127.0.0.1", port=5001, debug=_debug_enabled())`, `app.py:80`) y la
-> persistencia es un fichero SQLite en el disco local.
+> Redis, ni contenedores Docker, ni balanceador. En local la aplicación corre con
+> el servidor de desarrollo de Flask (`python app.py`, solo loopback) y en
+> producción con gunicorn (`gunicorn app:app`, un worker, ver sección 2.5). La
+> persistencia es un fichero SQLite en el disco local, efímero en el plan gratuito
+> de Render ([DT-21](TECHNICAL_DEBT_LOG.md#dt-21--sqlite-en-disco-efímero)).
 
 ### 2.4 Capas y dirección de dependencias
 
@@ -337,6 +339,22 @@ flowchart LR
 
 La consecuencia práctica es que los casos de uso se prueban con dobles en
 memoria, sin levantar Flask ni SQLite (`tests/unit/application/`).
+
+---
+
+### 2.5 CI/CD y despliegue (GitHub Actions + Render)
+
+No forma parte del hexágono: es infraestructura alrededor de él. Nada en `src/orderhub/` la conoce.
+
+| Pieza | Dónde | Qué hace |
+| :--- | :--- | :--- |
+| **CI** | [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) | En push y PR hacia `develop` y `main`: Python 3.9, `flake8 .`, `black --check -l 88 .`, `pytest --cov=src/orderhub --cov=.` y `coverage report --include="src/orderhub/*" --fail-under=100`. Permisos `contents: read`, sin secretos. |
+| **CD** | Auto-Deploy de Render, «After CI Checks Pass» | Render sigue `main` y despliega solo si todos los checks de GitHub Actions del commit pasan. No hay `deploy.yml`. |
+| **Versión de Python** | [`.python-version`](../.python-version) | `3.9`, igual que el CI. Un test ([`tests/unit/test_deploy_config.py`](../tests/unit/test_deploy_config.py)) comprueba que coinciden. |
+| **Servidor** | [`gunicorn.conf.py`](../gunicorn.conf.py) | Un worker y `bind` en `APP_HOST:PORT` (por defecto `0.0.0.0:5001`). Un solo worker porque `app.py` ejecuta `init_db()` al importarse ([DT-06](TECHNICAL_DEBT_LOG.md#dt-06--apppy-no-es-testeable-init_db-en-el-cuerpo-de-módulo)) y SQLite admite un único escritor. |
+| **Primer arranque** | `database.py::init_db` | Fuera de `APP_ENV=development` no siembra usuarios ni productos de demostración; el primer admin sale de `ADMIN_USERNAME` y `ADMIN_PASSWORD` (idempotente, solo hash bcrypt). |
+
+**Qué falta:** construir una imagen de contenedor (RNF-04.2; no hay `Dockerfile`), un endpoint `/health` dedicado (Render comprueba `/`) y medir el pipeline real: el CI se verificó en local, no se ha observado su ejecución en GitHub. Valores del panel de Render y advertencias del plan gratuito: sección «Despliegue en Render» del [README](../README.md).
 
 ---
 
@@ -970,11 +988,11 @@ del JSON de la API HTTP.
 | Endpoint de listado de órdenes (`GET /get_all_orders_legacy`) | ✅ Implementado | Protegido; nombre de ruta conservado del legado |
 | **Configuración sin secretos en código (RNF-02.1)** | ✅ **Cumplida** | `config.py` eliminado; `.env` + `settings.py`; guarda automática en la suite |
 | **Consultas parametrizadas (RNF-02.2)** | ✅ **Cumplida** | Cero concatenación de SQL en todo el repositorio, verificado por análisis AST en cada ejecución de la suite |
-| **Tests unitarios** | ✅ Implementados | 352 tests: dominio (10), aplicación (25), adaptadores (63), seguridad (243), configuración (11) |
-| **Tests de integración HTTP** | ✅ **Implementados** | 109 tests con Flask `test_client()` y SQLite real |
-| **Cobertura ≥ 80 % (RNF-01.2)** | ✅ **Cumplida** | 100 % en `src/orderhub/`; 96 % del proyecto completo |
+| **Tests unitarios** | ✅ Implementados | 361 tests: dominio (10), aplicación (25), adaptadores (63), seguridad (247), configuración (11), despliegue (5) |
+| **Tests de integración HTTP** | ✅ **Implementados** | 155 tests con Flask `test_client()` y SQLite real |
+| **Cobertura ≥ 80 % (RNF-01.2)** | ✅ **Cumplida** | 100 % en `src/orderhub/`; 99 % del proyecto completo |
 | **PEP 8 en `src/orderhub/` y `tests/` (RNF-01.3)** | ✅ **Cumplida** | `flake8` y `black --check` sin ningún hallazgo |
-| PEP 8 en los archivos de la raíz | ⚠️ Parcial | `E501` resueltos; quedan 6 `E402` estructurales en `app.py` ([DT-08](TECHNICAL_DEBT_LOG.md#dt-08--los-archivos-de-la-raíz-no-pasan-flake8-parcialmente-resuelta)) |
+| PEP 8 en los archivos de la raíz | ✅ Cumplida (tolerada) | `flake8 .` limpio: los 6 `E402` estructurales de `app.py` se toleran con `per-file-ignores` en `setup.cfg`; la causa sigue ([DT-08](TECHNICAL_DEBT_LOG.md#dt-08--los-archivos-de-la-raíz-no-pasan-flake8-parcialmente-resuelta)) |
 | Unicidad de `users.username` | ✅ Implementada | `UNIQUE` en el esquema + índice único para bases existentes ([DT-09](TECHNICAL_DEBT_LOG.md#dt-09--el-esquema-no-tiene-restricciones-de-integridad-parcialmente-resuelta)) |
 | Claves foráneas y `NOT NULL` en el esquema | ❌ No implementadas | Requiere recrear tablas ([DT-09](TECHNICAL_DEBT_LOG.md#dt-09--el-esquema-no-tiene-restricciones-de-integridad-parcialmente-resuelta)) |
 | Interfaz gráfica: login y explorador de API | ✅ Implementada | `static/`: login, vista protegida, logout en cliente y explorador de endpoints (sin pantallas de negocio) ([DT-05](TECHNICAL_DEBT_LOG.md#dt-05--el-panel-html-no-envía-el-token-resuelta), [DT-16](TECHNICAL_DEBT_LOG.md#dt-16--el-token-vive-en-sessionstorage)) |
@@ -1063,10 +1081,11 @@ Esta separación mejora, de forma concreta y verificable en este código:
 | `tests/unit/domain/` | 10 | Invariantes de `Product` y `Order` | Ninguna |
 | `tests/unit/application/` | 25 | Casos de uso | Dobles en memoria |
 | `tests/unit/adapters/` | 63 | Controladores, decoradores, bcrypt, JWT | Flask de juguete + dobles |
-| `tests/unit/security/` | 243 | Guardas estáticas de RNF-02.1, RNF-02.2 y de la UI (`static/`) | Ninguna (análisis del propio código) |
+| `tests/unit/security/` | 247 | Guardas estáticas de RNF-02.1, RNF-02.2 y de la UI (`static/`) | Ninguna (análisis del propio código) |
 | `tests/unit/test_settings.py` | 11 | Configuración por entorno y fallo en producción | `monkeypatch` del entorno |
-| `tests/integration/` | 109 | Repositorios, `Container` y flujos HTTP completos | Flask + SQLite reales |
-| **Total** | **461** | | |
+| `tests/unit/test_deploy_config.py` | 5 | `.python-version` coincide con el CI; `requirements.txt` con gunicorn, sin herramientas de desarrollo y con versiones fijadas | Ninguna (lee archivos) |
+| `tests/integration/` | 155 | Repositorios, `Container` y flujos HTTP completos | Flask + SQLite reales |
+| **Total** | **516** | | |
 
 ### 8.2 Aislamiento de la suite de integración
 
@@ -1135,7 +1154,7 @@ Comandos ejecutados sobre el estado actual del código:
 python -m pytest -q
 ```
 
-→ **461 passed**.
+→ **516 passed**.
 
 ```bash
 python -m pytest --cov=orderhub --cov-report=term
@@ -1144,11 +1163,13 @@ python -m pytest --cov=orderhub --cov-report=term
 → **100 % sobre `src/orderhub/`** (486 sentencias, 0 sin cubrir).
 
 Cobertura del proyecto completo, incluyendo los módulos legados de la raíz:
-**96 %** — 1853 de 1936 sentencias. Las 83 sin cubrir son `app.py` (26) y
-`database.py` (47), ambos al 0 % por el motivo explicado en
-[DT-06](TECHNICAL_DEBT_LOG.md#dt-06--apppy-no-es-testeable-init_db-en-el-cuerpo-de-módulo);
-las 10 restantes son ramas de fixtures de la propia suite. `config.py` ya no
-figura porque fue eliminado
+**99 %** — 2205 de 2217 sentencias. Las 12 sin cubrir son `app.py:113` (la
+llamada a `app.run`), `database.py:24` (la ruta de la base tomada del entorno) y
+10 ramas de fixtures de la propia suite. `app.py` y `database.py` se prueban
+importando `app.py` con `database.init_db` sustituido por un espía
+(`tests/integration/test_app_entrypoint.py` y `test_database_init.py`); la causa
+de [DT-06](TECHNICAL_DEBT_LOG.md#dt-06--apppy-no-es-testeable-init_db-en-el-cuerpo-de-módulo)
+sigue. `config.py` ya no figura porque fue eliminado
 ([DT-01](TECHNICAL_DEBT_LOG.md#dt-01--secretos-hardcodeados-en-configpy-resuelta)).
 El umbral exigido por RNF-01.2 es del 80 %.
 
@@ -1157,7 +1178,7 @@ flake8 src/orderhub/ tests/
 black --check src/orderhub/ tests/
 ```
 
-→ **Sin ningún hallazgo** en ambos casos (68 archivos verificados por black).
+→ **Sin ningún hallazgo** en ambos casos. Sobre el repositorio completo (`flake8 .` y `black --check -l 88 .`, con los `E402` de `app.py` tolerados en `setup.cfg`), black verifica 75 archivos sin cambios.
 
 Sobre los archivos de la raíz, `black --check` también pasa. `flake8` reporta
 **6 hallazgos, todos `E402` en `app.py`**, estructurales y conservados a

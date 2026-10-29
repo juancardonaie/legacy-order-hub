@@ -45,12 +45,14 @@ de:
 | [DT-12](#dt-12--contraseñas-en-texto-plano-resuelta) | Contraseñas en texto plano | ✅ Resuelta | RF-01.2 |
 | [DT-13](#dt-13--createorder-no-es-atómico-dos-transacciones-separadas) | `CreateOrder` no es atómico | 🔴 Abierta | RF-03.3 |
 | [DT-14](#dt-14--el-catálogo-no-distingue-productos-sin-stock-ni-pagina) | `GET /products` sin filtro ni paginación | 🔴 Abierta | RF-02.1 |
-| [DT-15](#dt-15--databasepy-siembra-datos-de-prueba-en-cualquier-entorno) | `init_db()` siembra datos de prueba siempre | 🔴 Abierta | RNF-02.1 |
+| [DT-15](#dt-15--databasepy-siembra-datos-de-prueba-en-cualquier-entorno) | `init_db()` siembra datos de prueba siempre (resuelta fuera de `development`) | 🟡 Parcial | RNF-02.1 |
 | [DT-16](#dt-16--el-token-vive-en-sessionstorage) | Token JWT en `sessionStorage` (riesgo XSS aceptado) | 🟡 Diferida | RF-01.3 |
 | [DT-17](#dt-17--la-ui-no-tiene-pruebas-automáticas-de-javascript) | La UI no tiene pruebas automáticas de JS | 🔴 Abierta | RNF-01.2 |
 | [DT-18](#dt-18--debugtrue-con-host-0000-resuelta) | `debug=True` con `host="0.0.0.0"` | ✅ Resuelta | RNF-02.1 |
 | [DT-19](#dt-19--get_all_orders_legacy-devuelve-las-órdenes-de-todos-los-usuarios) | `GET /get_all_orders_legacy` expone órdenes de todos | 🔴 Abierta | RF-03.4 |
 | [DT-20](#dt-20--formatos-de-error-inconsistentes-entre-endpoints) | Formatos de error inconsistentes | 🔴 Abierta | — |
+| [DT-21](#dt-21--sqlite-en-disco-efímero) | SQLite en disco efímero (Render gratuito) | 🔴 Abierta | RNF-03.1 |
+| [DT-22](#dt-22--python-39-sin-soporte-upstream) | Python 3.9 sin soporte upstream | 🔴 Abierta | — |
 
 ---
 
@@ -297,10 +299,9 @@ hay forma de importar el módulo apuntando a otra base.
    módulo llama a init_db() sobre orderhub.db».
 2. **Un fallo en el cableado real de `app.py` no sería detectado.** Si alguien
    olvidara registrar un blueprint, cambiara el orden de los decoradores o
-   rompiera la construcción del `jwt_required` **en `app.py`**, los 461 tests
+   rompiera la construcción del `jwt_required` **en `app.py`**, los 516 tests
    seguirían pasando, porque prueban una copia equivalente del cableado y no el
-   cableado real. Esto se refleja en la cobertura: `app.py` está al **0 %**
-   (26 sentencias, 26 sin cubrir).
+   cableado real. Antes se reflejaba en la cobertura (`app.py` al **0 %**); ver la actualización al final de esta entrada.
 
 **Cuál sería la solución.** Refactorizar a una *application factory*:
 `create_app(database_path)` que construya el `Container`, registre los
@@ -309,9 +310,19 @@ instanciación para el arranque real. La fixture de integración pasaría a llam
 a esa misma función con la ruta temporal, eliminando de paso la duplicación.
 
 **Por qué se difiere.** **Decisión tomada:** no se aplica en esta entrega. El
-requisito de cobertura ya se cumple con holgura (96 % del proyecto completo, 100 %
+requisito de cobertura ya se cumple con holgura (99 % del proyecto completo, 100 %
 en `src/orderhub/`, frente al 80 % exigido) y modificar el punto de entrada
 tiene más riesgo que beneficio en este momento.
+
+**Actualización (2026-10-28).** Sin refactorizar `app.py`, los tests ya lo
+importan sustituyendo `database.init_db` por un espía
+([`tests/integration/test_app_entrypoint.py`](../tests/integration/test_app_entrypoint.py)):
+comprueban los argumentos que recibe `init_db`, las rutas reales contra
+`static/endpoints.json`, `_server_options()` y `gunicorn.conf.py`. Con ello
+`app.py` pasa a 98 % y `database.py` a 99 % (con
+[`test_database_init.py`](../tests/integration/test_database_init.py)). **La causa
+sigue:** `init_db()` se ejecuta al importar y `integration_app` aún replica el
+cableado a mano. Por esa causa el despliegue usa **un solo worker** de gunicorn.
 
 ---
 
@@ -354,14 +365,14 @@ con DT-06.
 
 ## DT-08 — Los archivos de la raíz no pasan flake8 (PARCIALMENTE RESUELTA)
 
-**Estado:** 🟡 Parcial — `E501` resueltos, `E402` pendientes · **Requisito:** RNF-01.3 · **Severidad:** Baja
+**Estado:** 🟡 Parcial — `E501` resueltos; `E402` tolerados con `per-file-ignores` (la causa sigue) · **Requisito:** RNF-01.3 · **Severidad:** Baja
 
 **Qué era.** `src/orderhub/` y `tests/` cumplían flake8 y black sin un solo
 hallazgo, pero los módulos legados de la raíz acumulaban **9 hallazgos**:
 
 | Archivo:línea | Código | Detalle | Estado |
 | :--- | :--- | :--- | :--- |
-| `app.py:12-17` | `E402` (×6) | Imports no situados al inicio del archivo | 🔴 Pendiente |
+| `app.py:12-17` | `E402` (×6) | Imports no situados al inicio del archivo | 🟡 Tolerado en `setup.cfg` |
 | `app.py:58` | `E501` | Línea de 105 caracteres (comentario del HTML legado) | ✅ Resuelto |
 | `database.py:89, 93, 97` | `E501` (×3) | Sentencias `INSERT` de 92–94 caracteres | ✅ Resuelto |
 
@@ -390,10 +401,16 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "src
 from orderhub.adapters.inbound.http.auth_controller import create_auth_blueprint
 ```
 
-Mover esos imports arriba rompería el arranque de la aplicación. **Decisión
-tomada:** no se añade `# noqa` ni se excluye la raíz en
-[`setup.cfg`](../setup.cfg), para que los seis hallazgos **sigan apareciendo en
-el reporte** y la deuda permanezca visible en lugar de quedar enmascarada.
+Mover esos imports arriba rompería el arranque de la aplicación.
+
+**Actualización (2026-10-28).** La decisión original era no silenciarlos para
+que la deuda siguiera visible. Al añadir el CI (HU-05), que ejecuta
+`flake8 .` sobre todo el repositorio, esa política habría dejado el pipeline
+siempre en rojo. [`setup.cfg`](../setup.cfg) declara ahora
+`per-file-ignores = app.py:E402`: solo afecta a ese código en ese archivo, así
+que cualquier otro hallazgo, en `app.py` o fuera de él, sigue fallando. La causa
+estructural (el `sys.path.insert`) no se ha corregido, y la solución de abajo
+sigue vigente.
 
 **Qué riesgo implica.** RNF-01.3 exige que «el código» cumpla PEP 8. Una futura
 puerta de calidad en CI (HU-05) que ejecute flake8 sobre todo el repositorio
@@ -732,7 +749,7 @@ abordarla junto con la migración a PostgreSQL (RNF-03.1).
 
 ## DT-15 — `database.py` siembra datos de prueba en cualquier entorno
 
-**Estado:** 🔴 Abierta · **Requisito:** RNF-02.1 · **Severidad:** Media en despliegue, nula en desarrollo
+**Estado:** 🟡 Parcial (resuelta fuera de `development`; queda el riesgo de `APP_ENV` omitido) · **Requisito:** RNF-02.1 · **Severidad:** Media en despliegue, nula en desarrollo
 
 **Qué es.** `init_db()` crea el esquema y, si la tabla `users` está vacía,
 inserta dos usuarios de demostración con contraseñas conocidas —`admin/admin123`
@@ -764,6 +781,22 @@ se detectó al auditar la configuración, no porque estuviera comprometida.
 la creación del esquema (siempre) de la carga de datos de ejemplo (solo en
 desarrollo). Encaja de forma natural con DT-06, que ya propone sacar `init_db()`
 del cuerpo de módulo de `app.py`.
+
+**Actualización (2026-10-28).** Aplicada la solución propuesta:
+`database.py::init_db(database_path, app_env, admin_username, admin_password)`
+solo siembra los usuarios y productos de demostración con
+`APP_ENV=development`. Fuera de ese entorno no se siembra nada y el primer
+administrador sale de `ADMIN_USERNAME` y `ADMIN_PASSWORD` (idempotente: si el
+usuario existe no se toca; la contraseña se guarda solo como hash bcrypt, con la
+columna legada `password` en `NULL`). Está cubierto por
+[`tests/integration/test_database_init.py`](../tests/integration/test_database_init.py).
+
+**Lo que queda.** `APP_ENV` vale `development` si no se define
+([`settings.py`](../src/orderhub/settings.py)): un despliegue que lo omita
+sembraría `admin/admin123` y firmaría con los secretos de respaldo
+([DT-02](#dt-02--valor-por-defecto-inseguro-de-jwt_secret_key-resuelta)). El
+README exige `APP_ENV=production` en el panel de Render, pero nada lo impone en
+código. Sin `ADMIN_*` en producción la app arranca sin usuarios.
 
 ---
 
@@ -878,6 +911,50 @@ todo rompe el contrato actual y obliga a actualizar los tests de
 
 ---
 
+## DT-21 — SQLite en disco efímero
+
+**Estado:** 🔴 Abierta · **Requisito:** RNF-03.1 · **Severidad:** Alta en despliegue
+
+**Qué es.** En Render, un *Web Service* gratuito no admite discos persistentes y
+sus cambios en disco «se pierden cada vez que el servicio se redespliega,
+reinicia o se duerme». La base es un fichero SQLite (`DATABASE_PATH`, por defecto
+`orderhub.db`), así que **usuarios, productos y órdenes desaparecen** en cada uno
+de esos eventos. El servicio se duerme tras 15 minutos sin tráfico.
+
+**Qué se conserva.** El administrador se recrea en cada arranque desde
+`ADMIN_USERNAME` y `ADMIN_PASSWORD` ([DT-15](#dt-15--databasepy-siembra-datos-de-prueba-en-cualquier-entorno)).
+El catálogo y las órdenes no.
+
+**Opciones.** (a) Aceptarlo mientras sea una demostración. (b) Un plan de pago con
+disco persistente y `DATABASE_PATH` apuntando a él. (c) PostgreSQL (RNF-03.1),
+lo que exige un adaptador de salida nuevo; el diseño hexagonal lo permite sin
+tocar `domain/` ni `application/`.
+
+**[No verificado]** que el directorio de la aplicación en Render sea escribible
+en tiempo de ejecución; no se ha desplegado todavía.
+
+---
+
+## DT-22 — Python 3.9 sin soporte upstream
+
+**Estado:** 🔴 Abierta · **Severidad:** Media
+
+**Qué es.** El proyecto, el CI ([`ci.yml`](../.github/workflows/ci.yml)) y
+[`.python-version`](../.python-version) usan Python 3.9, que dejó de recibir
+parches de seguridad en octubre de 2025 (fecha de memoria, **[No verificado]**).
+`requirements.txt` es un `pip freeze` hecho en 3.9.
+
+**Por qué se mantiene.** Es la versión con la que se desarrolló y probó. Render
+acepta cualquier versión publicada desde la 3.7.3 y, sin `.python-version`,
+usaría 3.14.x, que no se ha probado aquí.
+
+**Solución futura.** Subir el CI a una versión con soporte, regenerar
+`requirements.txt` en ella y actualizar `.python-version` (el test
+`tests/unit/test_deploy_config.py` avisa si dejan de coincidir). **[No verificado]**
+que las dependencias fijadas funcionen en versiones más nuevas.
+
+---
+
 ## Deuda de alcance mayor, ya registrada en el backlog
 
 Las siguientes carencias no se listan como entradas individuales porque no son
@@ -888,7 +965,7 @@ en [`ANALYSIS_AND_REQUIREMENTS.md`](ANALYSIS_AND_REQUIREMENTS.md):
 | :--- | :--- | :--- |
 | Sin contenerización (`Dockerfile`, `docker-compose`) | RNF-03.1, RNF-03.2 | III |
 | Sin manifiestos de Kubernetes ni HPA | RNF-03.3, RNF-03.4 | III |
-| Sin pipeline de CI | RNF-04.1, RNF-04.2 | II |
+| CI implementado (`ci.yml`, despliegue con Auto-Deploy de Render tras el CI); falta construir la imagen de contenedor (RNF-04.2) y observar el pipeline en GitHub | RNF-04.1, RNF-04.2 | II |
 | Sin análisis SAST automatizado (Bandit / SonarQube) | RNF-02.3 | I–II |
 | Sin logs estructurados ni endpoint `/metrics` | RNF-05.1, RNF-05.2 | IV |
 | Persistencia en SQLite en lugar de PostgreSQL | RNF-03.1 | III |

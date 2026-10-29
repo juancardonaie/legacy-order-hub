@@ -2,8 +2,8 @@
 
 > **Asignatura:** Actualización y Mantenimiento de Software
 > **Punto de partida:** Producción Legada (v1.0.0-legacy) — *Alta Deuda Técnica*
-> **Estado actual:** Arquitectura Hexagonal · Autenticación JWT · Catálogo e inventario · Interfaz web (login y explorador de API) · 461 tests
-> **Cobertura de pruebas:** **100 %** en `src/orderhub/` · **96 %** del proyecto completo
+> **Estado actual:** Arquitectura Hexagonal · Autenticación JWT · Catálogo e inventario · Interfaz web (login y explorador de API) · 516 tests
+> **Cobertura de pruebas:** **100 %** en `src/orderhub/` · **99 %** del proyecto completo
 
 ---
 
@@ -56,7 +56,7 @@ Evolucionar y modernizar la aplicación **Legacy OrderHub** desde su estado mono
 | **Lenguaje / Framework** | Python / Flask Monolítico | ✅ Python 3.9 / Flask 3.1 + Arquitectura Hexagonal | Python 3.11+ / Flask o FastAPI modular |
 | **Base de Datos** | SQLite (SQL concatenado) | 🟡 SQLite con consultas parametrizadas y repositorios | PostgreSQL + ORM (SQLAlchemy / Alembic) |
 | **Seguridad** | Secretos *hardcoded*, contraseñas en claro | ✅ Bcrypt + JWT con expiración + roles + configuración desde `.env` (sin secretos en código) | `.env` / Vault, Hash Bcrypt/Argon2, JWT |
-| **Pruebas** | Ninguna (0 % coverage) | ✅ Pytest — 461 tests, 100 % en `src/orderhub/` | Pytest + Cobertura > 80 % + Mocks de IA |
+| **Pruebas** | Ninguna (0 % coverage) | ✅ Pytest — 516 tests, 100 % en `src/orderhub/` | Pytest + Cobertura > 80 % + Mocks de IA |
 | **Calidad de código** | Sin linters | ✅ `flake8` + `black` limpios en `src/` y `tests/` | Linters + SAST en CI |
 | **Infraestructura** | Ejecución local/servidor directo | ❌ Sin cambios | Docker Compose + Kubernetes (Minikube/k3s) |
 | **CI / CD** | Despliegue manual | ❌ Sin cambios | GitHub Actions / GitLab CI + SonarQube |
@@ -252,6 +252,40 @@ Fuera de `development` **no se siembran** `admin`/`juan` ni los productos de dem
 
 > **SQLite y discos efímeros.** Muchos servicios PaaS borran el disco en cada despliegue o reinicio, y con él usuarios, productos y órdenes (el administrador se recrea solo desde `ADMIN_*`). Para conservar los datos hay que montar un disco persistente y apuntar `DATABASE_PATH` a él (por ejemplo `/data/orderhub.db`). Cambiar de base de datos (PostgreSQL, RNF-03) queda fuera de este paso.
 
+### Despliegue en Render
+
+La plataforma de despliegue es **Render** (plan gratuito, *Web Service*). No hay un `deploy.yml`: la publicación la hace Render con su **Auto-Deploy en «After CI Checks Pass»**, apoyado en el CI de GitHub Actions.
+
+**Cómo funciona el pipeline**
+
+1. Cada push y cada pull request hacia `develop` o `main` ejecuta [`.github/workflows/ci.yml`](.github/workflows/ci.yml) (job «Lint y pruebas (Python 3.9)»): `flake8`, `black`, `pytest` con cobertura y la comprobación de 100 % en `src/orderhub/`.
+2. Al fusionar a `main` se vuelve a ejecutar el CI sobre el commit de la fusión.
+3. Render, que sigue la rama `main`, espera a que los checks de ese commit terminen y **solo despliega si todos pasan**. Si no se detecta ningún check o alguno falla, no despliega.
+4. Para que nadie fusione sin CI en verde, activa en GitHub una protección de rama en `main` que exija ese check (Settings → Branches).
+
+**Valores del panel de Render**
+
+| Campo | Valor |
+| :--- | :--- |
+| Runtime | `Python 3` |
+| Branch | `main` |
+| Build Command | `pip install -r requirements.txt` |
+| Start Command | `GUNICORN_CMD_ARGS="--access-logfile -" gunicorn app:app` |
+| Health Check Path | `/` |
+| Auto-Deploy | `After CI Checks Pass` |
+| Instance Type | `Free` |
+
+* **Versión de Python:** la fija el archivo [`.python-version`](.python-version) (`3.9`), la misma que usa el CI. Sin él, Render usaría su versión por defecto (3.14.x para servicios nuevos), que este proyecto no ha probado. El archivo debe estar en `main` antes del primer despliegue; un test comprueba que coincide con el CI.
+* **Variables de entorno:** `APP_ENV=production`, `JWT_SECRET_KEY`, `FLASK_SECRET_KEY`, `ADMIN_USERNAME` y `ADMIN_PASSWORD` (tabla de la sección anterior). No definas `PORT`: Render usa 10000 y `gunicorn.conf.py` lo respeta. Genera cada clave con `python -c "import secrets; print(secrets.token_urlsafe(48))"`; deben ser distintas entre sí.
+* **Start Command:** Render inyecta `GUNICORN_CMD_ARGS="--preload --access-logfile - --bind=0.0.0.0:10000"`. Con `--preload`, gunicorn importa la app en el proceso maestro antes de lanzar el worker, y en las pruebas locales en macOS (Python 3.9) el worker terminó con `SIGSEGV` en el primer login. Anteponer `GUNICORN_CMD_ARGS="--access-logfile -"` sustituye ese valor y quita `--preload`, y funcionó. En Linux no se probó si `--preload` falla: si lo sustituyes por otro valor y todo va bien, no pierdes nada.
+* **Health Check Path `/`:** devuelve la página de la interfaz (200) sin tocar la base de datos. No existe un `/health` dedicado.
+
+**Advertencias del plan gratuito**
+
+* **Disco efímero.** Los cambios en disco se pierden en cada despliegue, reinicio **y cuando el servicio se duerme** (el plan gratuito no admite discos persistentes). Como la base es un fichero SQLite, usuarios, productos y órdenes se pierden en cada uno de esos eventos. El administrador se recrea solo desde `ADMIN_*`; el catálogo y las órdenes, no (DT-21).
+* **Se duerme tras 15 minutos sin tráfico**, y la primera petición posterior tarda en torno a un minuto. Tiene un tope de 750 horas de instancia al mes.
+* **Sin `ADMIN_*` no hay ningún usuario**: la app arranca igual, pero nadie puede iniciar sesión.
+
 **Usar la interfaz web:** abre http://127.0.0.1:5001/ , inicia sesión con el usuario de prueba del seed (`admin` o `juan`; sus contraseñas de demostración están en `database.py` y en la sección de ejemplos de `curl` de este README, nunca en la UI) y verás tu usuario, rol y hasta cuándo es válida la sesión. «Cerrar sesión» borra el token en el navegador; el servidor no revoca tokens.
 
 **Usar el explorador de API:** tras el login aparece la lista de endpoints (método + ruta). Despliega uno, edita el body JSON si lo tiene y pulsa «Enviar»: verás el código HTTP, el tiempo en ms y la respuesta formateada.
@@ -282,7 +316,7 @@ Con reporte de cobertura:
 pytest --cov=orderhub --cov-report=term-missing
 ```
 
-La suite tiene **461 tests** organizados por capa: `tests/unit/domain/`, `tests/unit/application/`, `tests/unit/adapters/`, `tests/unit/security/` y `tests/integration/`. Los tests de integración usan Flask y SQLite reales, cada uno contra una base temporal aislada — nunca tocan `orderhub.db`.
+La suite tiene **516 tests** organizados por capa: `tests/unit/domain/`, `tests/unit/application/`, `tests/unit/adapters/`, `tests/unit/security/` y `tests/integration/`. Los tests de integración usan Flask y SQLite reales, cada uno contra una base temporal aislada — nunca tocan `orderhub.db`.
 
 `tests/unit/security/` contiene dos **guardas estáticas** que analizan el propio repositorio en cada ejecución: una falla si alguna consulta SQL se construye por concatenación en lugar de con parámetros (RNF-02.2), y la otra si reaparece un secreto en el código fuente o si `.env` deja de estar ignorado (RNF-02.1).
 
