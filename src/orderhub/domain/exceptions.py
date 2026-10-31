@@ -50,3 +50,29 @@ class InvalidStockError(DomainError):
     def __init__(self, stock):
         super().__init__("El stock no puede ser negativo")
         self.stock = stock
+
+
+class InvalidUsernameError(DomainError):
+    def __init__(self, username):
+        super().__init__(
+            "El nombre de usuario debe tener entre 3 y 32 caracteres "
+            "y solo puede usar minúsculas, dígitos, '.', '_' y '-'"
+        )
+        self.username = username
+
+
+class InvalidPasswordError(DomainError):
+    """Contraseña que incumple la política. No guarda la contraseña: el mensaje
+    describe la regla incumplida y nada más, para que no acabe en un log."""
+
+
+class InvalidRoleError(DomainError):
+    def __init__(self, role):
+        super().__init__("El rol debe ser 'admin' o 'client'")
+        self.role = role
+
+
+class UsernameAlreadyExistsError(DomainError):
+    def __init__(self, username):
+        super().__init__("El nombre de usuario ya existe")
+        self.username = username

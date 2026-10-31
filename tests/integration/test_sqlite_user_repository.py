@@ -14,6 +14,8 @@ from orderhub.adapters.outbound.persistence.sqlite.connection import (
 from orderhub.adapters.outbound.persistence.sqlite.sqlite_user_repository import (
     SQLiteUserRepository,
 )
+from orderhub.domain.entities.user import User
+from orderhub.domain.exceptions import UsernameAlreadyExistsError
 
 
 @pytest.fixture
@@ -116,3 +118,62 @@ def test_la_unicidad_no_impide_crear_usuarios_con_username_distinto(
 
     assert repository.find_by_username("admin2") is not None
     assert repository.find_by_username("admin").id == 1
+
+
+# --- add (creación de usuarios) ---------------------------------------------
+
+
+def test_add_guarda_el_usuario_y_devuelve_su_id(repository, connection):
+    nuevo = User(id=None, username="ana", password_hash="$2b$hash", role="client")
+
+    guardado = repository.add(nuevo)
+
+    assert guardado.id is not None
+    assert (guardado.username, guardado.role) == ("ana", "client")
+    assert nuevo.id is None  # la entidad original no se muta
+    assert repository.find_by_username("ana") == guardado
+
+
+def test_add_deja_la_columna_password_en_null(repository, connection):
+    repository.add(User(None, "ana", "$2b$hash", "client"))
+
+    fila = connection.execute(
+        "SELECT password, password_hash FROM users WHERE username = ?", ("ana",)
+    ).fetchone()
+
+    assert fila["password"] is None
+    assert fila["password_hash"] == "$2b$hash"
+
+
+def test_add_rechaza_un_username_repetido(repository, connection):
+    with pytest.raises(UsernameAlreadyExistsError) as error:
+        repository.add(User(None, "admin", "$2b$otro", "admin"))
+
+    assert error.value.username == "admin"
+    cuenta = connection.execute(
+        "SELECT COUNT(*) FROM users WHERE username = 'admin'"
+    ).fetchone()[0]
+    assert cuenta == 1
+
+
+def test_dos_altas_simultaneas_del_mismo_username_solo_una_gana(database_path):
+    """Carrera: ambas pasan una consulta previa; la unicidad del esquema decide."""
+    primero = SQLiteUserRepository(SQLiteConnectionFactory(database_path))
+    segundo = SQLiteUserRepository(SQLiteConnectionFactory(database_path))
+    assert primero.find_by_username("ana") is None
+    assert segundo.find_by_username("ana") is None
+
+    primero.add(User(None, "ana", "$2b$a", "client"))
+    with pytest.raises(UsernameAlreadyExistsError):
+        segundo.add(User(None, "ana", "$2b$b", "admin"))
+
+    assert primero.find_by_username("ana").password_hash == "$2b$a"
+
+
+def test_add_con_sql_malicioso_en_el_username_se_guarda_como_texto(repository):
+    raro = "x'); DROP TABLE users;--"
+
+    repository.add(User(None, raro, "$2b$hash", "client"))
+
+    assert repository.find_by_username(raro).username == raro
+    assert repository.find_by_username("admin") is not None

@@ -23,6 +23,11 @@ class InMemoryUserRepository(UserRepository):
     def find_by_username(self, username: str) -> Optional[User]:
         return self._users.get(username)
 
+    def add(self, user: User) -> User:
+        # AuthenticateUser no da de alta usuarios: el método existe solo para
+        # que el doble siga siendo instanciable tras ampliar el puerto.
+        raise NotImplementedError
+
 
 class FakePasswordHasher(PasswordHasher):
     """No usa bcrypt: trata el hash como la contraseña en claro con un
@@ -30,6 +35,9 @@ class FakePasswordHasher(PasswordHasher):
 
     def verify(self, plain_password: str, password_hash: str) -> bool:
         return password_hash == f"hashed::{plain_password}"
+
+    def hash(self, plain_password: str) -> str:
+        return f"hashed::{plain_password}"
 
 
 @pytest.fixture

@@ -65,3 +65,22 @@ def test_verifica_contrasenas_con_caracteres_no_ascii(hasher):
 
     assert hasher.verify(clave, _hash(clave)) is True
     assert hasher.verify("ñandu-Ω-🔐", _hash(clave)) is False
+
+
+def test_hash_produce_un_hash_bcrypt_que_verify_acepta(hasher):
+    resultado = hasher.hash(PASSWORD)
+
+    assert resultado.startswith("$2")
+    assert PASSWORD not in resultado
+    assert hasher.verify(PASSWORD, resultado) is True
+    assert hasher.verify("otra-contrasena", resultado) is False
+
+
+def test_hash_usa_un_salt_distinto_en_cada_llamada(hasher):
+    assert hasher.hash(PASSWORD) != hasher.hash(PASSWORD)
+
+
+def test_hash_admite_caracteres_no_ascii(hasher):
+    clave = "ñandú-Ω-🔐"
+
+    assert hasher.verify(clave, hasher.hash(clave)) is True
