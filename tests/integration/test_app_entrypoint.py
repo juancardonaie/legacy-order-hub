@@ -94,6 +94,50 @@ def test_la_ruta_raiz_entrega_la_interfaz(app_module):
     response.close()
 
 
+# --- Rate limit ---------------------------------------------------------------
+
+
+LIMITE_GLOBAL_DE_PRUEBA = 5
+
+
+@pytest.fixture
+def app_con_limite_global(llamadas_init_db, monkeypatch):
+    """`app.py` importado con límites fijados aquí, sin depender del entorno
+    ni de un .env local: settings se lee al construir el Container."""
+    monkeypatch.setattr(settings, "RATE_LIMIT_ENABLED", True)
+    monkeypatch.setattr(settings, "RATE_LIMIT_GLOBAL_MAX", LIMITE_GLOBAL_DE_PRUEBA)
+    monkeypatch.setattr(settings, "RATE_LIMIT_GLOBAL_WINDOW", 60)
+    monkeypatch.setattr(settings, "TRUSTED_PROXY_HOPS", 0)
+    monkeypatch.delitem(sys.modules, "app", raising=False)
+    return importlib.import_module("app")
+
+
+def test_app_py_instala_el_limite_global_pero_no_cuenta_la_raiz(
+    app_con_limite_global,
+):
+    cliente = app_con_limite_global.app.test_client()
+
+    for _ in range(LIMITE_GLOBAL_DE_PRUEBA + 5):
+        assert cliente.get("/").status_code == 200
+
+    for _ in range(LIMITE_GLOBAL_DE_PRUEBA):
+        assert cliente.get("/ruta-que-no-existe").status_code == 404
+    bloqueada = cliente.get("/ruta-que-no-existe")
+    assert bloqueada.status_code == 429
+    assert "Retry-After" in bloqueada.headers
+
+
+def test_app_py_registra_post_users_con_login_y_rate_limit(app_module):
+    reglas = {
+        (metodo, regla.rule)
+        for regla in app_module.app.url_map.iter_rules()
+        for metodo in regla.methods
+    }
+
+    assert ("POST", "/users") in reglas
+    assert ("POST", "/login") in reglas
+
+
 # --- Debug y servidor de desarrollo ------------------------------------------
 
 

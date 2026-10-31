@@ -83,3 +83,48 @@ FLASK_SECRET_KEY = _required_secret("FLASK_SECRET_KEY", DEV_FALLBACK_FLASK_SECRE
 DEFAULT_DATABASE_PATH = "orderhub.db"
 
 DATABASE_PATH = os.environ.get("DATABASE_PATH", DEFAULT_DATABASE_PATH)
+
+
+# --- Límite de peticiones (rate limit) -----------------------------------------
+# Valores por defecto holgados para que una demo en clase no se bloquee. Una
+# variable vacía equivale a no definida. Un valor inválido aborta el arranque.
+_TRUE_VALUES = ("1", "true", "yes", "on")
+_FALSE_VALUES = ("0", "false", "no", "off")
+
+
+def _int_setting(name: str, default: int, minimum: int) -> int:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        raise ValueError(f"{name} debe ser un entero, no '{raw}'") from None
+    if value < minimum:
+        raise ValueError(f"{name} debe ser un entero mayor o igual que {minimum}")
+    return value
+
+
+def _bool_setting(name: str, default: bool) -> bool:
+    raw = os.environ.get(name, "").strip().lower()
+    if not raw:
+        return default
+    if raw in _TRUE_VALUES:
+        return True
+    if raw in _FALSE_VALUES:
+        return False
+    raise ValueError(f"{name} debe ser 1/0, true/false, yes/no u on/off")
+
+
+RATE_LIMIT_ENABLED = _bool_setting("RATE_LIMIT_ENABLED", True)
+RATE_LIMIT_LOGIN_MAX = _int_setting("RATE_LIMIT_LOGIN_MAX", 30, 1)
+RATE_LIMIT_LOGIN_WINDOW = _int_setting("RATE_LIMIT_LOGIN_WINDOW", 60, 1)
+RATE_LIMIT_USERS_MAX = _int_setting("RATE_LIMIT_USERS_MAX", 30, 1)
+RATE_LIMIT_USERS_WINDOW = _int_setting("RATE_LIMIT_USERS_WINDOW", 60, 1)
+RATE_LIMIT_GLOBAL_MAX = _int_setting("RATE_LIMIT_GLOBAL_MAX", 300, 1)
+RATE_LIMIT_GLOBAL_WINDOW = _int_setting("RATE_LIMIT_GLOBAL_WINDOW", 60, 1)
+
+# Saltos de proxy en los que se confía para leer la IP real de X-Forwarded-For.
+# 0 = ninguno (la cabecera se ignora). Detrás de Render, fíjalo tras comprobar
+# cuántos proxies hay delante; un valor mayor que el real permite falsificar la IP.
+TRUSTED_PROXY_HOPS = _int_setting("TRUSTED_PROXY_HOPS", 0, 0)

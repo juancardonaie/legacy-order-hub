@@ -51,3 +51,48 @@ export function onLoginSubmit(handler) {
 export function onLogoutClick(handler) {
     $("logout-button").addEventListener("click", handler);
 }
+
+// --- Formulario "Crear usuario" (solo admin) ---------------------------------
+
+export function showCreateUser(visible) {
+    $("create-user-view").hidden = !visible;
+    if (!visible) {
+        resetCreateUser();
+    }
+}
+
+export function resetCreateUser() {
+    $("create-user-form").reset();
+    showCreateUserMessage("");
+}
+
+export function readNewUser() {
+    return {
+        username: $("new-username").value.trim(),
+        password: $("new-password").value,
+        isAdmin: $("new-is-admin").checked,
+    };
+}
+
+export function clearNewPassword() {
+    $("new-password").value = "";
+}
+
+export function showCreateUserMessage(message, isSuccess = false) {
+    const element = $("create-user-message");
+    element.textContent = message;
+    element.className = isSuccess ? "message message--ok" : "message";
+    element.hidden = message === "";
+}
+
+export function setCreatingUser(isCreating) {
+    $("create-user-button").disabled = isCreating;
+    $("create-user-button").textContent = isCreating ? "Creando…" : "Crear usuario";
+}
+
+export function onCreateUserSubmit(handler) {
+    $("create-user-form").addEventListener("submit", (event) => {
+        event.preventDefault();
+        handler();
+    });
+}

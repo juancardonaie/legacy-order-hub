@@ -98,5 +98,37 @@
         "role": null,
         "body_example": null,
         "body_fields": []
+    },
+    {
+        "method": "POST",
+        "path": "/users",
+        "summary": "Crea un usuario. Solo para administradores.",
+        "auth": true,
+        "role": "admin",
+        "body_example": {
+            "username": "nuevo.usuario",
+            "password": "",
+            "role": "client"
+        },
+        "body_fields": [
+            {
+                "name": "username",
+                "type": "string",
+                "required": true,
+                "description": "3 a 32 caracteres: minúsculas, dígitos, '.', '_' y '-'."
+            },
+            {
+                "name": "password",
+                "type": "string",
+                "required": true,
+                "description": "Al menos 8 caracteres y como máximo 72 bytes UTF-8."
+            },
+            {
+                "name": "role",
+                "type": "string",
+                "required": false,
+                "description": "\"client\" o \"admin\". Por defecto \"client\"."
+            }
+        ]
     }
 ]

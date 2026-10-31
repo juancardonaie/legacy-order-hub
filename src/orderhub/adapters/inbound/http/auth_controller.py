@@ -1,3 +1,5 @@
+from typing import Callable, Optional
+
 from flask import Blueprint, jsonify, request
 
 from orderhub.application.ports.token_service import TokenServicePort
@@ -8,6 +10,7 @@ from orderhub.domain.exceptions import InvalidCredentialsError
 def create_auth_blueprint(
     authenticate_user: AuthenticateUser,
     token_service: TokenServicePort,
+    rate_limit: Optional[Callable] = None,
 ) -> Blueprint:
     """Adaptador primario HTTP para /login.
 
@@ -17,10 +20,15 @@ def create_auth_blueprint(
     La emisión del token de sesión se hace aquí y no dentro del caso de uso:
     autenticar es una regla de negocio, mientras que el formato en que se
     transporta la sesión es un detalle del protocolo HTTP.
+
+    `rate_limit` es un decorador opcional (límite por IP). Sin él, /login se
+    comporta exactamente igual que antes.
     """
     blueprint = Blueprint("auth", __name__)
+    apply_rate_limit = rate_limit or (lambda view: view)
 
     @blueprint.route("/login", methods=["POST"])
+    @apply_rate_limit
     def login_endpoint():
         data = request.get_json(silent=True) or {}
         username = data.get("username")

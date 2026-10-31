@@ -53,6 +53,8 @@ de:
 | [DT-20](#dt-20--formatos-de-error-inconsistentes-entre-endpoints) | Formatos de error inconsistentes | 🔴 Abierta | — |
 | [DT-21](#dt-21--sqlite-en-disco-efímero) | SQLite en disco efímero (Render gratuito) | 🔴 Abierta | RNF-03.1 |
 | [DT-22](#dt-22--python-39-sin-soporte-upstream) | Python 3.9 sin soporte upstream | 🔴 Abierta | — |
+| [DT-23](#dt-23--el-rate-limit-es-en-memoria-por-proceso) | Rate limit en memoria por proceso | 🟡 Diferida | RNF-02 |
+| [DT-24](#dt-24--un-body-json-que-no-es-un-objeto-provoca-un-500) | Body JSON que no es un objeto da 500 | 🔴 Abierta | — |
 
 ---
 
@@ -930,6 +932,10 @@ disco persistente y `DATABASE_PATH` apuntando a él. (c) PostgreSQL (RNF-03.1),
 lo que exige un adaptador de salida nuevo; el diseño hexagonal lo permite sin
 tocar `domain/` ni `application/`.
 
+**Nota (creación de usuarios).** Los usuarios creados con `POST /users` también
+se pierden en estos eventos: solo el administrador de `ADMIN_*` se recrea. Es un
+tema de despliegue y de documentación, no de diseño.
+
 **[No verificado]** que el directorio de la aplicación en Render sea escribible
 en tiempo de ejecución; no se ha desplegado todavía.
 
@@ -952,6 +958,65 @@ usaría 3.14.x, que no se ha probado aquí.
 `requirements.txt` en ella y actualizar `.python-version` (el test
 `tests/unit/test_deploy_config.py` avisa si dejan de coincidir). **[No verificado]**
 que las dependencias fijadas funcionen en versiones más nuevas.
+
+---
+
+## DT-23 — El rate limit es en memoria, por proceso
+
+**Estado:** 🟡 Diferida · **Requisito:** RNF-02 (endurecimiento; no es un requisito oficial) · **Severidad:** Baja (demostración)
+
+**Qué hay.** `rate_limiter.py` / `rate_limiting.py` limitan `POST /login` por IP,
+`POST /users` por `user_id` del token y todo lo demás de forma global y suave por
+IP (sin contar `/` ni `/static/*`). Responde `429` con `Retry-After`.
+
+**Limitaciones asumidas.**
+
+* **Memoria del proceso.** Los contadores se pierden al reiniciar o dormirse el
+  servicio (Render gratuito) y cada worker tendría los suyos: solo es válido con
+  un worker, igual que `init_db()` ([DT-06](#dt-06--apppy-no-es-testeable-init_db-en-el-cuerpo-de-módulo)).
+* **Ventana fija.** Permite una ráfaga de hasta el doble del límite en el borde
+  entre dos ventanas.
+* **Tope de claves.** Para acotar la memoria hay un máximo de claves; al llegar a
+  él se descarta la más antigua. Un atacante que genere muchas claves distintas
+  (muchas IP) puede expulsar su propia entrada y **reiniciar su contador**.
+* **Sin bloqueo por usuario.** Es deliberado: bloquear por username permitiría
+  dejar fuera a un usuario ajeno.
+* **IP detrás de proxy.** `TRUSTED_PROXY_HOPS` vale 0 por defecto (se ignora
+  `X-Forwarded-For`). El recuento correcto de proxies de Render **[No verificado]**
+  (procedimiento en la sección «Despliegue en Render» del README). Un valor mayor
+  que el real permite falsificar la IP; uno menor hace que todos compartan la del
+  proxy.
+
+**Solución futura.** Un almacén compartido (Redis) o la librería Flask-Limiter,
+cuando haya más de un worker. Se descartó ahora por sus dependencias nuevas
+(`limits`, `rich`, `ordered-set`, …) y un probable conflicto con el
+`packaging==26.3` fijado (**[No verificado]** por instalación).
+
+---
+
+## DT-24 — Un body JSON que no es un objeto provoca un 500
+
+**Estado:** 🔴 Abierta · **Severidad:** Baja · **Fuera de alcance de la rama `feature/create-account`**
+
+**Qué es.** Los controllers leen el body con `request.get_json(silent=True) or {}`
+y luego llaman a `data.get(...)`. Un body que es JSON válido pero no un objeto
+(por ejemplo `[1]`, `"abc"` o `5`) es verdadero y pasa el `or {}`; `.get` falla con
+`AttributeError` y Flask devuelve **500**.
+
+**Evidencia.**
+
+* `src/orderhub/adapters/inbound/http/auth_controller.py:33-34` (`POST /login`).
+  **Verificado en ejecución:** `[1]`, `"abc"` y `5` dan 500; también `password: 123`
+  (`bcrypt_password_hasher.py` llama a `.encode`) y `username: ["a"]`
+  (`sqlite3.InterfaceError`).
+* `src/orderhub/adapters/inbound/http/product_controller.py:55` (`POST /products`)
+  y `order_controller.py:34` (`POST /create_order`): mismo patrón, deducido del
+  código, **[No verificado]** por ejecución.
+
+**Solución futura.** Como hace `POST /users` (`user_controller.py`): comprobar
+`isinstance(data, dict)` y el tipo de cada campo y responder 400. El endpoint
+nuevo ya lo hace; los antiguos se dejan sin tocar para no mezclarlo con esta
+rama.
 
 ---
 
