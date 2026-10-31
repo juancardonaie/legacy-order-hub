@@ -99,6 +99,27 @@ dd {
     margin: 0;
 }
 
+.message--ok {
+    color: #1b6e3c;
+}
+
+.create-user {
+    margin-top: 24px;
+    padding-top: 8px;
+    border-top: 1px solid var(--border);
+}
+
+.create-user .create-user-check {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-weight: 400;
+}
+
+.create-user input[type="checkbox"] {
+    width: auto;
+}
+
 .container--wide {
     max-width: 900px;
 }

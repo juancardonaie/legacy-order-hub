@@ -60,9 +60,12 @@ Toda la lógica vive en `src/orderhub/`, siguiendo Arquitectura Hexagonal.
   `TokenServicePort` y su adaptador `JWTTokenService` (RF-01.3, sección 4).
 * **Autorización por rol** mediante los decoradores `jwt_required` y
   `require_role`, aplicados sobre las vistas HTTP (RF-01.4, sección 5).
-* **Cinco endpoints de API** más la interfaz web (`static/`: login y explorador de API): `POST /login`,
-  `POST /create_order`, `GET /get_all_orders_legacy`, `POST /products` y
-  `GET /products` (sección 5.3).
+* **Seis endpoints de API** más la interfaz web (`static/`: login, explorador de API y formulario de alta de usuarios para admin): `POST /login`,
+  `POST /create_order`, `GET /get_all_orders_legacy`, `POST /products`,
+  `GET /products` y `POST /users` (sección 5.3).
+* **Límite de peticiones** (rate limit) propio, en memoria, en el adaptador de
+  entrada: por IP en `/login`, por usuario en `/users` y global suave
+  ([DT-23](TECHNICAL_DEBT_LOG.md#dt-23--el-rate-limit-es-en-memoria-por-proceso)).
 * **Catálogo e inventario (RF-02)**: consulta del catálogo con precio y stock
   actual, descuento de stock al comprar y rechazo de compras que superan la
   disponibilidad (sección 5-bis).
@@ -72,7 +75,7 @@ Toda la lógica vive en `src/orderhub/`, siguiendo Arquitectura Hexagonal.
 * **Cero secretos en el código fuente**: toda la configuración se lee del
   entorno en `src/orderhub/settings.py`, alimentado por un `.env` que no se
   versiona. `config.py` fue eliminado (RNF-02.1, sección 3.5).
-* **516 tests** (unitarios y de integración) con **100 % de cobertura sobre
+* **757 tests** (unitarios y de integración) con **100 % de cobertura sobre
   `src/orderhub/`** (sección 9).
 
 `database.py` se mantiene solo para el *bootstrap* del esquema y una migración
@@ -85,13 +88,16 @@ tiene el proyecto:
 
 * **La interfaz web no tiene pantallas de negocio.** Existen el login, una
   vista protegida (usuario, rol y expiración) y un explorador de API tipo
-  Swagger ligero (sección 3.6). No hay tablas, filtros ni vistas por rol, y el JS no tiene pruebas automáticas
+  Swagger ligero (sección 3.6). No hay tablas ni filtros de negocio. Las únicas piezas que dependen del rol son el formulario «Crear usuario» (solo `admin`) y el filtro del explorador por rol; ocultarlos es solo comodidad, la seguridad es el `403` del backend. El JS no tiene pruebas automáticas
   ([DT-17](TECHNICAL_DEBT_LOG.md#dt-17--la-ui-no-tiene-pruebas-automáticas-de-javascript)).
 * **No hay refresh tokens ni revocación.** El token es de un solo uso hasta que
   expira; no existe *logout* del lado del servidor ni lista de revocación.
-* **No hay registro de usuarios.** Los usuarios se siembran en `database.py`;
-  no existe endpoint de alta ni caso de uso de creación de usuarios, y por
-  tanto tampoco un flujo de hashing en alta (solo en el sembrado).
+* **No hay registro público de usuarios** (decisión de diseño). Los usuarios
+  los crea un administrador con `POST /users` (caso de uso `CreateUser`, hash
+  bcrypt en el alta) o salen del primer admin (`ADMIN_*`) y del seed de
+  desarrollo. No hay cambio de contraseña, edición ni borrado de usuarios, y no
+  se audita quién crea cada administrador. Los usuarios creados se pierden en
+  Render gratuito ([DT-21](TECHNICAL_DEBT_LOG.md#dt-21--sqlite-en-disco-efímero)).
 * **No hay edición ni borrado de productos.** El catálogo admite alta
   (`POST /products`, solo admin) y consulta (`GET /products`, RF-02.1), pero no
   hay endpoints de modificación ni de baja. El listado devuelve el catálogo
@@ -140,7 +146,7 @@ legacy-order-hub/
 ├── static/                         # UI: cliente HTTP externo, NO parte del hexágono
 │   ├── index.html                  # Login + vista protegida, servido por "/"
 │   ├── css/styles.css
-│   └── js/                         # Módulos ES: main, ui, auth, api, session
+│   └── js/                         # Módulos ES: main, ui, auth, api, session, explorer, users
 ├── docs/
 │   ├── ANALYSIS_AND_REQUIREMENTS.md
 │   ├── ARCHITECTURE.md             # Este documento
@@ -152,8 +158,8 @@ legacy-order-hub/
 │       │   ├── entities/
 │       │   │   ├── order.py        # Order (dataclass) + Order.create()
 │       │   │   ├── product.py      # Product + Product.create() + reglas de stock/precio
-│       │   │   └── user.py         # User (dataclass, incluye role)
-│       │   └── exceptions.py       # DomainError y 7 subclases
+│       │   │   └── user.py         # User + User.create() + política de username, rol y contraseña
+│       │   └── exceptions.py       # DomainError y 11 subclases
 │       ├── application/
 │       │   ├── ports/
 │       │   │   ├── order_repository.py
@@ -165,6 +171,7 @@ legacy-order-hub/
 │       │       ├── authenticate_user.py
 │       │       ├── create_order.py
 │       │       ├── create_product.py        # RF-01.4
+│       │       ├── create_user.py           # Alta de usuario (rol validado en el dominio)
 │       │       ├── list_orders.py
 │       │       └── list_products.py         # RF-02.1: catálogo con precio y stock
 │       ├── adapters/
@@ -172,6 +179,9 @@ legacy-order-hub/
 │       │   │   ├── auth_controller.py       # POST /login (emite el token)
 │       │   │   ├── order_controller.py      # POST /create_order, GET /get_all_orders_legacy
 │       │   │   ├── product_controller.py    # POST /products (admin) + GET /products
+│       │   │   ├── user_controller.py       # POST /users (admin): crea client o admin
+│       │   │   ├── rate_limiter.py          # Limitador en memoria (ventana fija), sin Flask
+│       │   │   ├── rate_limiting.py         # Rate limit HTTP: 429, clave IP/usuario, ProxyFix
 │       │   │   ├── jwt_required.py          # Decorador de autenticación
 │       │   │   └── require_role.py          # Decorador de autorización
 │       │   └── outbound/
@@ -188,12 +198,13 @@ legacy-order-hub/
     ├── conftest.py                 # Fixtures comunes (identidades, helper Bearer)
     ├── unit/
     │   ├── test_settings.py        # 11 tests (configuración por entorno)
+    │   ├── test_settings_rate_limit.py  # 22 tests (variables RATE_LIMIT_* y TRUSTED_PROXY_HOPS)
     │   ├── test_deploy_config.py   # 5 tests (.python-version, CI y requirements.txt coherentes)
-    │   ├── domain/                 # 10 tests
-    │   ├── application/            # 25 tests
-    │   ├── adapters/               # 63 tests
-    │   └── security/               # 247 tests (guardas RNF-02.1, RNF-02.2 y de la UI)
-    └── integration/                # 155 tests (Flask + SQLite reales, database.py y app.py)
+    │   ├── domain/                 # 55 tests
+    │   ├── application/            # 37 tests
+    │   ├── adapters/               # 134 tests
+    │   └── security/               # 276 tests (guardas RNF-02.1, RNF-02.2 y de la UI)
+    └── integration/                # 217 tests (Flask + SQLite reales, database.py y app.py)
 ```
 
 ### 2.2 Diagrama C4 — Nivel 1: Contexto
@@ -456,6 +467,19 @@ entrada concreto que traduce un protocolo externo a una llamada a un caso de uso
 * **`product_controller.py`**: expone `POST /products` bajo `@jwt_required` +
   `@require_role("admin")`. Valida solo la *forma* del JSON (que `price` sea
   numérico y `stock` entero); las reglas de negocio quedan en `Product.create()`.
+* **`user_controller.py`**: expone `POST /users` bajo `@jwt_required`, el límite
+  por usuario y `@require_role("admin")`, en ese orden: el límite se aplica antes
+  de leer el body, hashear o consultar la base. Valida la *forma* (el body es un
+  objeto y `username`, `password` y `role` son texto); las reglas de negocio
+  (formato del username, política de contraseña, rol `admin`/`client`) viven en
+  el dominio. Traduce `Invalid*Error` a 400 y `UsernameAlreadyExistsError` a 409.
+* **`rate_limiter.py`** y **`rate_limiting.py`**: límite de peticiones. El primero
+  es el mecanismo puro (ventana fija, `Lock`, reloj inyectable, purga de claves
+  vencidas y tope de claves) y no importa Flask, así que lo construye el
+  `Container`. El segundo es la parte HTTP: clave por IP o por `user_id`,
+  respuesta `429` con `Retry-After`, límite global (que no cuenta `/` ni
+  `/static/*`) y `ProxyFix` solo si `TRUSTED_PROXY_HOPS` > 0. Nada de esto toca
+  `domain/` ni `application/`.
 * **`jwt_required.py`** y **`require_role.py`**: decoradores de autenticación y
   autorización. Se detallan en la sección 5.
 
@@ -566,11 +590,12 @@ hexagonal: `src/orderhub/` no la importa ni la conoce.
 | Archivo | Responsabilidad |
 | :--- | :--- |
 | `static/index.html` | Estructura de las vistas (login y sesión con explorador) y CSP `default-src 'self'` |
-| `static/js/main.js` | Arranque, eventos y temporizador de expiración |
+| `static/js/main.js` | Arranque, eventos, temporizador de expiración y alta de usuarios: muestra el formulario solo si `user.role === "admin"` y lo oculta en logout y al expirar |
 | `static/js/ui.js` | Render con `textContent`; sin lógica de negocio |
 | `static/js/auth.js` | `login()` y `logout()` (este último solo borra el token en cliente) |
 | `static/js/api.js` | Único módulo con `fetch`: `request()` con `Authorization: Bearer` (un `401` autenticado limpia la sesión, un `403` no), `loadCatalog()` y `send()` para el explorador |
-| `static/js/explorer.js` | Explorador de API: un `<details>` por endpoint, textarea de body, status, tiempo y respuesta con `textContent`; enmascara `token` en `/login` |
+| `static/js/explorer.js` | Explorador de API: un `<details>` por endpoint, textarea de body, status, tiempo y respuesta con `textContent`; enmascara `token` en `/login`. Solo lista los endpoints cuyo `role` es `null` o coincide con el de la sesión (comodidad, no seguridad) |
+| `static/js/users.js` | `createUser(username, password, role)` sobre `request()` de `api.js` (`POST /users`). Sin `fetch` propio |
 | `static/endpoints.json` | Catálogo de endpoints (método, ruta, `auth`, `role`, `body_example`, `body_fields`); fuente única del explorador |
 | `static/js/session.js` | `sessionStorage` y lectura de `exp` (solo para UX; la firma la valida el backend) |
 
@@ -778,6 +803,7 @@ Verificado leyendo cada decorador en los controladores:
 | `GET` | `/get_all_orders_legacy` | ✅ `@jwt_required` | Cualquiera autenticado | `order_controller.py:69-70` |
 | `GET` | `/products` | ✅ `@jwt_required` | Cualquiera autenticado | `product_controller.py:43-44` |
 | `POST` | `/products` | ✅ `@jwt_required` | **`admin`** | `product_controller.py:49-51` |
+| `POST` | `/users` | ✅ `@jwt_required` + límite por usuario | **`admin`** | `user_controller.py` (`create_user_endpoint`) |
 
 **Por qué `/create_order` no exige rol `admin`:** crear una orden *es comprar*.
 Restringirlo a administradores impediría el caso de uso central del sistema. La
@@ -790,6 +816,14 @@ compradores. La misma ruta tiene por eso dos niveles de protección según el
 método: leer el catálogo basta con estar autenticado; **modificarlo** exige
 `admin`. Se exige token —y no acceso público— por coherencia con el resto de la
 API: el catálogo expone el stock, que es información de negocio.
+
+**Por qué `POST /users` es solo para admin y no hay registro público:** abrir el
+alta a cualquiera permitiría a un anónimo obtener un `client` y, con él, ver las
+órdenes de todos ([DT-19](TECHNICAL_DEBT_LOG.md#dt-19--get_all_orders_legacy-devuelve-las-órdenes-de-todos-los-usuarios))
+y agotar stock. El rol del nuevo usuario viaja en el body (`"client"` por
+defecto) y lo valida el dominio: es seguro porque solo un `admin` llega a leerlo.
+Ocultar el formulario a un `client` en la UI es comodidad; la autorización es el
+`403` de `require_role`.
 
 **Por qué `GET /` es público:** entrega la interfaz web (`static/index.html`),
 no una operación sobre datos. Los datos que la UI consume siguen protegidos
@@ -988,15 +1022,16 @@ del JSON de la API HTTP.
 | Endpoint de listado de órdenes (`GET /get_all_orders_legacy`) | ✅ Implementado | Protegido; nombre de ruta conservado del legado |
 | **Configuración sin secretos en código (RNF-02.1)** | ✅ **Cumplida** | `config.py` eliminado; `.env` + `settings.py`; guarda automática en la suite |
 | **Consultas parametrizadas (RNF-02.2)** | ✅ **Cumplida** | Cero concatenación de SQL en todo el repositorio, verificado por análisis AST en cada ejecución de la suite |
-| **Tests unitarios** | ✅ Implementados | 361 tests: dominio (10), aplicación (25), adaptadores (63), seguridad (247), configuración (11), despliegue (5) |
-| **Tests de integración HTTP** | ✅ **Implementados** | 155 tests con Flask `test_client()` y SQLite real |
+| **Tests unitarios** | ✅ Implementados | 540 tests: dominio (55), aplicación (37), adaptadores (134), seguridad (276), configuración (33), despliegue (5) |
+| **Tests de integración HTTP** | ✅ **Implementados** | 217 tests con Flask `test_client()` y SQLite real |
 | **Cobertura ≥ 80 % (RNF-01.2)** | ✅ **Cumplida** | 100 % en `src/orderhub/`; 99 % del proyecto completo |
 | **PEP 8 en `src/orderhub/` y `tests/` (RNF-01.3)** | ✅ **Cumplida** | `flake8` y `black --check` sin ningún hallazgo |
 | PEP 8 en los archivos de la raíz | ✅ Cumplida (tolerada) | `flake8 .` limpio: los 6 `E402` estructurales de `app.py` se toleran con `per-file-ignores` en `setup.cfg`; la causa sigue ([DT-08](TECHNICAL_DEBT_LOG.md#dt-08--los-archivos-de-la-raíz-no-pasan-flake8-parcialmente-resuelta)) |
 | Unicidad de `users.username` | ✅ Implementada | `UNIQUE` en el esquema + índice único para bases existentes ([DT-09](TECHNICAL_DEBT_LOG.md#dt-09--el-esquema-no-tiene-restricciones-de-integridad-parcialmente-resuelta)) |
 | Claves foráneas y `NOT NULL` en el esquema | ❌ No implementadas | Requiere recrear tablas ([DT-09](TECHNICAL_DEBT_LOG.md#dt-09--el-esquema-no-tiene-restricciones-de-integridad-parcialmente-resuelta)) |
 | Interfaz gráfica: login y explorador de API | ✅ Implementada | `static/`: login, vista protegida, logout en cliente y explorador de endpoints (sin pantallas de negocio) ([DT-05](TECHNICAL_DEBT_LOG.md#dt-05--el-panel-html-no-envía-el-token-resuelta), [DT-16](TECHNICAL_DEBT_LOG.md#dt-16--el-token-vive-en-sessionstorage)) |
-| Registro de usuarios por API | ❌ No implementado | Los usuarios se siembran en `database.py` |
+| **Creación de usuarios por un admin** | ✅ **Implementada** | `POST /users` (`CreateUser`), solo `admin`; formulario en la UI solo para admin. No hay registro público ni cambio/borrado de usuarios |
+| **Límite de peticiones (rate limit)** | ✅ **Implementado** (con límites) | `/login` por IP, `/users` por usuario y global suave; `429` + `Retry-After`. En memoria, un solo worker ([DT-23](TECHNICAL_DEBT_LOG.md#dt-23--el-rate-limit-es-en-memoria-por-proceso)) |
 | Refresh token / revocación / logout | ❌ No implementado | El token vive hasta expirar |
 | Eliminación de la columna `password` | ❌ No implementada | [DT-03](TECHNICAL_DEBT_LOG.md#dt-03--columna-password-en-texto-plano-en-el-esquema) |
 | Edición y borrado de productos | ❌ No implementados | Solo alta y consulta; sin `PUT`/`DELETE` |
@@ -1078,14 +1113,15 @@ Esta separación mejora, de forma concreta y verificable en este código:
 
 | Directorio | Tests | Qué prueba | Con qué infraestructura |
 | :--- | ---: | :--- | :--- |
-| `tests/unit/domain/` | 10 | Invariantes de `Product` y `Order` | Ninguna |
-| `tests/unit/application/` | 25 | Casos de uso | Dobles en memoria |
-| `tests/unit/adapters/` | 63 | Controladores, decoradores, bcrypt, JWT | Flask de juguete + dobles |
-| `tests/unit/security/` | 247 | Guardas estáticas de RNF-02.1, RNF-02.2 y de la UI (`static/`) | Ninguna (análisis del propio código) |
+| `tests/unit/domain/` | 55 | Invariantes de `Product`, `Order` y `User` (username, rol, contraseña) | Ninguna |
+| `tests/unit/application/` | 37 | Casos de uso | Dobles en memoria |
+| `tests/unit/adapters/` | 134 | Controladores, decoradores, rate limit, bcrypt, JWT | Flask de juguete + dobles |
+| `tests/unit/security/` | 276 | Guardas estáticas de RNF-02.1, RNF-02.2 y de la UI (`static/`) | Ninguna (análisis del propio código) |
 | `tests/unit/test_settings.py` | 11 | Configuración por entorno y fallo en producción | `monkeypatch` del entorno |
+| `tests/unit/test_settings_rate_limit.py` | 22 | Variables `RATE_LIMIT_*` y `TRUSTED_PROXY_HOPS` | `monkeypatch` del entorno |
 | `tests/unit/test_deploy_config.py` | 5 | `.python-version` coincide con el CI; `requirements.txt` con gunicorn, sin herramientas de desarrollo y con versiones fijadas | Ninguna (lee archivos) |
-| `tests/integration/` | 155 | Repositorios, `Container` y flujos HTTP completos | Flask + SQLite reales |
-| **Total** | **516** | | |
+| `tests/integration/` | 217 | Repositorios, `Container` y flujos HTTP completos (incluido `POST /users` y el rate limit con reloj falso) | Flask + SQLite reales |
+| **Total** | **757** | | |
 
 ### 8.2 Aislamiento de la suite de integración
 
@@ -1154,18 +1190,18 @@ Comandos ejecutados sobre el estado actual del código:
 python -m pytest -q
 ```
 
-→ **516 passed**.
+→ **757 passed**.
 
 ```bash
 python -m pytest --cov=orderhub --cov-report=term
 ```
 
-→ **100 % sobre `src/orderhub/`** (486 sentencias, 0 sin cubrir).
+→ **100 % sobre `src/orderhub/`** (739 sentencias, 0 sin cubrir).
 
 Cobertura del proyecto completo, incluyendo los módulos legados de la raíz:
-**99 %** — 2205 de 2217 sentencias. Las 12 sin cubrir son `app.py:113` (la
+**99 %** — 3339 de 3356 sentencias. Las 17 sin cubrir son `app.py:135` (la
 llamada a `app.run`), `database.py:24` (la ruta de la base tomada del entorno) y
-10 ramas de fixtures de la propia suite. `app.py` y `database.py` se prueban
+15 líneas de dobles y fixtures de la propia suite. `app.py` y `database.py` se prueban
 importando `app.py` con `database.init_db` sustituido por un espía
 (`tests/integration/test_app_entrypoint.py` y `test_database_init.py`); la causa
 de [DT-06](TECHNICAL_DEBT_LOG.md#dt-06--apppy-no-es-testeable-init_db-en-el-cuerpo-de-módulo)
@@ -1178,7 +1214,7 @@ flake8 src/orderhub/ tests/
 black --check src/orderhub/ tests/
 ```
 
-→ **Sin ningún hallazgo** en ambos casos. Sobre el repositorio completo (`flake8 .` y `black --check -l 88 .`, con los `E402` de `app.py` tolerados en `setup.cfg`), black verifica 75 archivos sin cambios.
+→ **Sin ningún hallazgo** en ambos casos. Sobre el repositorio completo (`flake8 .` y `black --check -l 88 .`, con los `E402` de `app.py` tolerados en `setup.cfg`), black verifica 86 archivos sin cambios.
 
 Sobre los archivos de la raíz, `black --check` también pasa. `flake8` reporta
 **6 hallazgos, todos `E402` en `app.py`**, estructurales y conservados a

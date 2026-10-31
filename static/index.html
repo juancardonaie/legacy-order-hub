@@ -38,6 +38,29 @@
                 <dd id="session-expiry"></dd>
             </dl>
             <button id="logout-button" type="button">Cerrar sesión</button>
+
+            <section id="create-user-view" class="create-user" hidden>
+                <h3>Crear usuario</h3>
+                <form id="create-user-form" novalidate>
+                    <label for="new-username">Usuario</label>
+                    <input id="new-username" name="username" type="text"
+                           autocomplete="off" autocapitalize="none"
+                           spellcheck="false" required>
+
+                    <label for="new-password">Contraseña</label>
+                    <input id="new-password" name="password" type="password"
+                           autocomplete="new-password" required>
+
+                    <label for="new-is-admin" class="create-user-check">
+                        <input id="new-is-admin" name="is_admin" type="checkbox">
+                        <span>Usuario administrador</span>
+                    </label>
+
+                    <button id="create-user-button" type="submit">Crear usuario</button>
+                </form>
+                <p id="create-user-message" class="message" role="alert" hidden></p>
+            </section>
+
             <div id="explorer" class="explorer"></div>
         </section>
     </main>

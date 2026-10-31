@@ -25,6 +25,13 @@ from orderhub.adapters.inbound.http.auth_controller import create_auth_blueprint
 from orderhub.adapters.inbound.http.jwt_required import create_jwt_required
 from orderhub.adapters.inbound.http.order_controller import create_order_blueprint
 from orderhub.adapters.inbound.http.product_controller import create_product_blueprint
+from orderhub.adapters.inbound.http.rate_limiter import RateLimitConfig
+from orderhub.adapters.inbound.http.rate_limiting import (
+    install_rate_limiting,
+    rate_limit_by_ip,
+    rate_limit_by_user,
+)
+from orderhub.adapters.inbound.http.user_controller import create_user_blueprint
 from orderhub.container import Container
 
 # Mismo esquema que database.init_db(), incluida la columna legada `password`
@@ -52,6 +59,10 @@ CREATE TABLE orders (
     status TEXT
 );
 """
+
+# Límites tan altos que ningún test existente puede toparse con ellos. Los tests
+# del propio límite construyen su app con `make_app` y valores bajos.
+HIGH_RATE_LIMITS = RateLimitConfig(login_max=10**6, users_max=10**6, global_max=10**6)
 
 ADMIN_PASSWORD = "admin123"
 CLIENT_PASSWORD = "123456"
@@ -128,15 +139,16 @@ def connection(database_path):
 @pytest.fixture
 def container(database_path) -> Container:
     """Composition Root real apuntando a la BD temporal."""
-    return Container(database_path=database_path)
+    return Container(database_path=database_path, rate_limits=HIGH_RATE_LIMITS)
 
 
-@pytest.fixture
-def integration_app(container) -> Flask:
+def _build_app(container: Container, trusted_proxy_hops: int = 0) -> Flask:
     """App Flask cableada igual que app.py, pero contra la BD temporal.
 
     No se importa app.py porque su cuerpo de módulo llama a init_db() sobre
     orderhub.db. El cableado se replica aquí; ver nota en el resumen del paso.
+    El límite de peticiones usa la misma función que app.py
+    (install_rate_limiting).
     """
     import os
 
@@ -160,6 +172,7 @@ def integration_app(container) -> Flask:
         create_auth_blueprint(
             authenticate_user=container.authenticate_user,
             token_service=container.token_service,
+            rate_limit=rate_limit_by_ip(container.rate_limiters.login),
         )
     )
     app.register_blueprint(
@@ -169,12 +182,40 @@ def integration_app(container) -> Flask:
             jwt_required=jwt_required,
         )
     )
+    app.register_blueprint(
+        create_user_blueprint(
+            create_user=container.create_user,
+            jwt_required=jwt_required,
+            rate_limit=rate_limit_by_user(container.rate_limiters.users),
+        )
+    )
+    install_rate_limiting(
+        app,
+        container.rate_limiters.global_,
+        trusted_proxy_hops=trusted_proxy_hops,
+    )
 
     @app.route("/")
     def index():
         return app.send_static_file("index.html")
 
     return app
+
+
+@pytest.fixture
+def integration_app(container) -> Flask:
+    return _build_app(container)
+
+
+@pytest.fixture
+def make_app(database_path):
+    """Fábrica de apps con límites propios, para probar el rate limit."""
+
+    def _make(rate_limits: RateLimitConfig, trusted_proxy_hops: int = 0) -> Flask:
+        container = Container(database_path=database_path, rate_limits=rate_limits)
+        return _build_app(container, trusted_proxy_hops)
+
+    return _make
 
 
 @pytest.fixture
