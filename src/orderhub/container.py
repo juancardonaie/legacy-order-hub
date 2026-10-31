@@ -5,6 +5,12 @@ por constructor. Cambiar SQLite por otra persistencia solo debería tocar aquí 
 los adaptadores correspondientes.
 """
 
+from typing import Optional
+
+from orderhub.adapters.inbound.http.rate_limiter import (
+    RateLimitConfig,
+    create_rate_limiters,
+)
 from orderhub.adapters.outbound.persistence.sqlite.connection import (
     SQLiteConnectionFactory,
 )
@@ -24,13 +30,30 @@ from orderhub.adapters.outbound.security.jwt_token_service import JWTTokenServic
 from orderhub.application.use_cases.authenticate_user import AuthenticateUser
 from orderhub.application.use_cases.create_order import CreateOrder
 from orderhub.application.use_cases.create_product import CreateProduct
+from orderhub.application.use_cases.create_user import CreateUser
 from orderhub.application.use_cases.list_orders import ListOrders
 from orderhub.application.use_cases.list_products import ListProducts
 from orderhub import settings
 
 
+def _rate_limits_from_settings() -> RateLimitConfig:
+    return RateLimitConfig(
+        enabled=settings.RATE_LIMIT_ENABLED,
+        login_max=settings.RATE_LIMIT_LOGIN_MAX,
+        login_window=settings.RATE_LIMIT_LOGIN_WINDOW,
+        users_max=settings.RATE_LIMIT_USERS_MAX,
+        users_window=settings.RATE_LIMIT_USERS_WINDOW,
+        global_max=settings.RATE_LIMIT_GLOBAL_MAX,
+        global_window=settings.RATE_LIMIT_GLOBAL_WINDOW,
+    )
+
+
 class Container:
-    def __init__(self, database_path: str) -> None:
+    def __init__(
+        self,
+        database_path: str,
+        rate_limits: Optional[RateLimitConfig] = None,
+    ) -> None:
         connection_factory = SQLiteConnectionFactory(database_path)
 
         self.product_repository = SQLiteProductRepository(connection_factory)
@@ -57,4 +80,15 @@ class Container:
         self.authenticate_user = AuthenticateUser(
             user_repository=self.user_repository,
             password_hasher=self.password_hasher,
+        )
+        self.create_user = CreateUser(
+            user_repository=self.user_repository,
+            password_hasher=self.password_hasher,
+        )
+
+        # Los limitadores no dependen de Flask: el cableado HTTP está en
+        # rate_limiting.install_rate_limiting. `rate_limits` permite a los tests
+        # fijar límites propios sin tocar el entorno.
+        self.rate_limiters = create_rate_limiters(
+            rate_limits or _rate_limits_from_settings()
         )

@@ -185,7 +185,14 @@ function buildEndpoint(endpoint, index, onSessionExpired) {
     return details;
 }
 
-export async function mountExplorer({ onSessionExpired }) {
+// Mostrar solo lo que el rol de la sesión puede usar es comodidad: la
+// autorización real es el 403 del backend.
+function visibleFor(endpoints, user) {
+    const role = user ? user.role : null;
+    return endpoints.filter((endpoint) => endpoint.role === null || endpoint.role === role);
+}
+
+export async function mountExplorer({ user, onSessionExpired }) {
     const root = document.getElementById("explorer");
     mountCounter += 1;
     const current = mountCounter;
@@ -206,7 +213,7 @@ export async function mountExplorer({ onSessionExpired }) {
     }
 
     root.appendChild(el("h2", "", "Explorador de API"));
-    endpoints.forEach((endpoint, index) => {
+    visibleFor(endpoints, user).forEach((endpoint, index) => {
         root.appendChild(buildEndpoint(endpoint, index, onSessionExpired));
     });
 }

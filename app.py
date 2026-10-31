@@ -14,6 +14,12 @@ from orderhub.adapters.inbound.http.auth_controller import create_auth_blueprint
 from orderhub.adapters.inbound.http.jwt_required import create_jwt_required
 from orderhub.adapters.inbound.http.order_controller import create_order_blueprint
 from orderhub.adapters.inbound.http.product_controller import create_product_blueprint
+from orderhub.adapters.inbound.http.rate_limiting import (
+    install_rate_limiting,
+    rate_limit_by_ip,
+    rate_limit_by_user,
+)
+from orderhub.adapters.inbound.http.user_controller import create_user_blueprint
 from orderhub.container import Container
 
 # Toda la configuración viene del entorno (.env); ya no hay literales aquí ni
@@ -49,6 +55,7 @@ app.register_blueprint(
     create_auth_blueprint(
         authenticate_user=container.authenticate_user,
         token_service=container.token_service,
+        rate_limit=rate_limit_by_ip(container.rate_limiters.login),
     )
 )
 app.register_blueprint(
@@ -57,6 +64,21 @@ app.register_blueprint(
         list_products=container.list_products,
         jwt_required=jwt_required,
     )
+)
+app.register_blueprint(
+    create_user_blueprint(
+        create_user=container.create_user,
+        jwt_required=jwt_required,
+        rate_limit=rate_limit_by_user(container.rate_limiters.users),
+    )
+)
+
+# Límite global por IP (excluye "/" y "/static/*") y, si TRUSTED_PROXY_HOPS > 0,
+# ProxyFix para leer la IP real detrás de un proxy.
+install_rate_limiting(
+    app,
+    container.rate_limiters.global_,
+    trusted_proxy_hops=settings.TRUSTED_PROXY_HOPS,
 )
 
 

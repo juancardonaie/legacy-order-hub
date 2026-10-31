@@ -23,24 +23,24 @@ black --check -l 88 .
 
 Estado esperado: la suite pasa completa, 100 % de cobertura en `src/orderhub/`, `black` y `flake8` limpios (los `E402` de `app.py` se toleran con `per-file-ignores` en `setup.cfg`, DT-08). No introduzcas errores nuevos. El CI (`.github/workflows/ci.yml`) ejecuta lo mismo y además exige 100 % en `src/orderhub/`.
 
-Configuración por `.env` (copiar de `.env.example`). Con `APP_ENV=development` hay secretos de respaldo inseguros; fuera de él, faltar `JWT_SECRET_KEY` o `FLASK_SECRET_KEY` aborta el arranque. `APP_DEBUG`, `PORT`, `APP_HOST`, `ADMIN_USERNAME` y `ADMIN_PASSWORD` los leen `app.py`/`gunicorn.conf.py`/`database.py`, no `settings.py`.
+Configuración por `.env` (copiar de `.env.example`). Con `APP_ENV=development` hay secretos de respaldo inseguros; fuera de él, faltar `JWT_SECRET_KEY` o `FLASK_SECRET_KEY` aborta el arranque. `APP_DEBUG`, `PORT`, `APP_HOST`, `ADMIN_USERNAME` y `ADMIN_PASSWORD` los leen `app.py`/`gunicorn.conf.py`/`database.py`, no `settings.py`. En cambio `RATE_LIMIT_ENABLED`, `RATE_LIMIT_{LOGIN,USERS,GLOBAL}_{MAX,WINDOW}` y `TRUSTED_PROXY_HOPS` sí los lee `settings.py` (por defecto 30/60, 30/60, 300/60 y 0; un valor inválido aborta el arranque). Los contadores son en memoria y solo valen con un worker (DT-23); con `TRUSTED_PROXY_HOPS=0` se ignora `X-Forwarded-For`.
 
 ## Architecture
 
 Hexagonal en `src/orderhub/`. Las dependencias apuntan hacia adentro:
 
 - `domain/` (entidades `Product`, `Order`, `User` y excepciones) y `application/` (puertos ABC en `ports/`, casos de uso en `use_cases/`) **no importan** Flask, sqlite3, bcrypt, jwt, os ni dotenv, ni `adapters`/`container`. Mantén esa pureza.
-- `adapters/inbound/http/`: blueprints Flask, `jwt_required` y `require_role`. Traducen excepciones de dominio a JSON + código HTTP; las excepciones de dominio no conocen HTTP.
+- `adapters/inbound/http/`: blueprints Flask, `jwt_required` y `require_role`. Traducen excepciones de dominio a JSON + código HTTP; las excepciones de dominio no conocen HTTP. El rate limit vive aquí y está partido a propósito: `rate_limiter.py` es el limitador puro (**sin Flask**, lo construye el `Container`) y `rate_limiting.py` es la parte HTTP (clave IP/usuario, `429` + `Retry-After`, límite global, `ProxyFix`). `install_rate_limiting(...)` es el único cableado y lo llaman `app.py` y `tests/integration/conftest.py`.
 - `adapters/outbound/`: repositorios SQLite (SQL siempre parametrizado con `?`), `BcryptPasswordHasher`, `JWTTokenService` (único módulo que importa `jwt`).
 - `container.py` es el único sitio que instancia clases concretas e inyecta por constructor. La composición queda repartida: `jwt_required` se construye en `app.py` (depende de Flask, el `Container` no debe conocerlo) y los blueprints se registran allí.
 
 Raíz del repo (legado, fuera del hexágono): `app.py` (arranque; añade `src/` a `sys.path`, llama a `init_db()` **al importar**, DT-06; los tests lo importan sustituyendo `database.init_db` por un espía, ver `tests/integration/test_app_entrypoint.py`) y `database.py` (esquema, migraciones mínimas, seed de demostración **solo con `APP_ENV=development`** y primer admin desde `ADMIN_USERNAME`/`ADMIN_PASSWORD`, idempotente). La suite de integración replica el cableado de `app.py` en `tests/integration/conftest.py` (`integration_app`).
 
-Autenticación: `AuthenticateUser` valida con el hasher; el **controller** emite el JWT. El rol viaja dentro del token (claim `role`): cambiar el rol en la BD exige nuevo login. `POST /create_order` toma `user_id` del token, nunca del body. Solo `POST /products` exige rol `admin`; el resto, token válido (`/login` y `/` son públicos). Los formatos de error no son uniformes (`{status, message}` vs `{error}`).
+Autenticación: `AuthenticateUser` valida con el hasher; el **controller** emite el JWT. El rol viaja dentro del token (claim `role`): cambiar el rol en la BD exige nuevo login. `POST /create_order` toma `user_id` del token, nunca del body. `POST /products` y `POST /users` exigen rol `admin`; el resto, token válido (`/login` y `/` son públicos). No hay registro público: solo un admin crea usuarios, con `role` `client` (por defecto) o `admin` en el body, validado en el dominio. En `POST /users` el orden de decoradores es `@jwt_required`, límite por `user_id`, `@require_role("admin")`. Los formatos de error no son uniformes (`{status, message}` vs `{error}`).
 
 ### UI (`static/`)
 
-Cliente HTTP externo, **fuera del hexágono**: `src/orderhub/` no la importa. HTML + JS vanilla (módulos ES), sin Node ni build ni recursos externos; Flask sirve `GET /` y `/static/*`. Contiene el login y un explorador de API tipo Swagger ligero alimentado por `static/endpoints.json`.
+Cliente HTTP externo, **fuera del hexágono**: `src/orderhub/` no la importa. HTML + JS vanilla (módulos ES), sin Node ni build ni recursos externos; Flask sirve `GET /` y `/static/*`. Contiene el login, un explorador de API tipo Swagger ligero alimentado por `static/endpoints.json` (solo lista los endpoints cuyo `role` es `null` o el de la sesión) y, solo para `admin`, el formulario «Crear usuario» (`static/js/users.js` sobre `request()` de `api.js`). Ocultar por rol es comodidad; la seguridad es el `403` del backend.
 
 Reglas que las guardas de `tests/unit/security/test_static_ui_safety.py` hacen cumplir:
 

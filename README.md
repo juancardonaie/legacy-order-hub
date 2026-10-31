@@ -2,7 +2,7 @@
 
 > **Asignatura:** Actualización y Mantenimiento de Software
 > **Punto de partida:** Producción Legada (v1.0.0-legacy) — *Alta Deuda Técnica*
-> **Estado actual:** Arquitectura Hexagonal · Autenticación JWT · Catálogo e inventario · Interfaz web (login y explorador de API) · 516 tests
+> **Estado actual:** Arquitectura Hexagonal · Autenticación JWT · Catálogo e inventario · Interfaz web (login, explorador de API y alta de usuarios para admin) · Rate limit · 757 tests
 > **Cobertura de pruebas:** **100 %** en `src/orderhub/` · **99 %** del proyecto completo
 
 ---
@@ -56,7 +56,7 @@ Evolucionar y modernizar la aplicación **Legacy OrderHub** desde su estado mono
 | **Lenguaje / Framework** | Python / Flask Monolítico | ✅ Python 3.9 / Flask 3.1 + Arquitectura Hexagonal | Python 3.11+ / Flask o FastAPI modular |
 | **Base de Datos** | SQLite (SQL concatenado) | 🟡 SQLite con consultas parametrizadas y repositorios | PostgreSQL + ORM (SQLAlchemy / Alembic) |
 | **Seguridad** | Secretos *hardcoded*, contraseñas en claro | ✅ Bcrypt + JWT con expiración + roles + configuración desde `.env` (sin secretos en código) | `.env` / Vault, Hash Bcrypt/Argon2, JWT |
-| **Pruebas** | Ninguna (0 % coverage) | ✅ Pytest — 516 tests, 100 % en `src/orderhub/` | Pytest + Cobertura > 80 % + Mocks de IA |
+| **Pruebas** | Ninguna (0 % coverage) | ✅ Pytest — 757 tests, 100 % en `src/orderhub/` | Pytest + Cobertura > 80 % + Mocks de IA |
 | **Calidad de código** | Sin linters | ✅ `flake8` + `black` limpios en `src/` y `tests/` | Linters + SAST en CI |
 | **Infraestructura** | Ejecución local/servidor directo | ❌ Sin cambios | Docker Compose + Kubernetes (Minikube/k3s) |
 | **CI / CD** | Despliegue manual | ❌ Sin cambios | GitHub Actions / GitLab CI + SonarQube |
@@ -92,10 +92,11 @@ Estas eran las áreas críticas detectadas en la auditoría inicial (HU-01). El 
 | `GET` | `/get_all_orders_legacy` | ✅ Token requerido | Cualquiera autenticado | Lista todas las órdenes |
 | `GET` | `/products` | ✅ Token requerido | Cualquiera autenticado | Lista el catálogo con precio y **stock actual** (RF-02.1) |
 | `POST` | `/products` | ✅ Token requerido | **`admin`** | Da de alta un producto en el catálogo |
+| `POST` | `/users` | ✅ Token requerido | **`admin`** | Crea un usuario (`role` `client` por defecto, o `admin`) |
 
-Códigos de error relevantes: **401** si falta el token, está expirado o la firma no es válida; **403** si el token es válido pero el rol no basta; **404** si el producto no existe; **400** si el stock solicitado supera el disponible (RF-02.3).
+Códigos de error relevantes: **401** si falta el token, está expirado o la firma no es válida; **403** si el token es válido pero el rol no basta; **404** si el producto no existe; **400** si el stock solicitado supera el disponible (RF-02.3) o si los datos de `POST /users` no son válidos; **409** si el username ya existe; **429** si se supera el límite de peticiones (cabecera `Retry-After`).
 
-> La interfaz web vive en `static/` y es un **cliente HTTP externo** de la API: no forma parte de la arquitectura hexagonal (`src/orderhub/` no la conoce). Ofrece login y, tras iniciar sesión, un **explorador de API** ligero (tipo Swagger) para probar los endpoints sin `curl`; no hay pantallas de negocio (tablas, filtros, vistas por rol). Limitaciones: [DT-16](docs/TECHNICAL_DEBT_LOG.md) (token en `sessionStorage`) y [DT-17](docs/TECHNICAL_DEBT_LOG.md) (sin pruebas de JS).
+> La interfaz web vive en `static/` y es un **cliente HTTP externo** de la API: no forma parte de la arquitectura hexagonal (`src/orderhub/` no la conoce). Ofrece login y, tras iniciar sesión, un **explorador de API** ligero (tipo Swagger) para probar los endpoints sin `curl`; no hay pantallas de negocio (tablas, filtros). Las dos únicas piezas que dependen del rol son el formulario «Crear usuario» (solo `admin`) y el filtro del explorador, que solo lista los endpoints que el rol de la sesión puede usar; ocultarlos es **solo comodidad**, la seguridad real es el `403` del backend. Limitaciones: [DT-16](docs/TECHNICAL_DEBT_LOG.md) (token en `sessionStorage`) y [DT-17](docs/TECHNICAL_DEBT_LOG.md) (sin pruebas de JS).
 
 ### Cómo autenticarse
 
@@ -170,6 +171,21 @@ Si el stock solicitado supera el disponible, la respuesta es un **400** con el d
   "available": 5
 }
 ```
+
+**6. Crear un usuario** (solo `admin`). El rol viaja en el body (`"client"` o `"admin"`, por defecto `"client"`); el username son 3 a 32 caracteres de `[a-z0-9._-]` (las mayúsculas se rechazan) y la contraseña tiene 8 caracteres como mínimo y 72 bytes UTF-8 como máximo:
+
+```bash
+curl -X POST http://localhost:5001/users \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{"username":"ana","password":"clave-segura-1","role":"client"}'
+```
+
+```json
+{ "status": "success", "user": { "id": 3, "username": "ana", "role": "client" } }
+```
+
+La respuesta nunca incluye la contraseña ni su hash. No existe registro público: solo un `admin` crea usuarios. Un `client` recibe `403`, sin token `401`, un username repetido `409`.
 
 El token caduca a los **60 minutos** por defecto. Es configurable mediante variables de entorno (`JWT_SECRET_KEY`, `JWT_ALGORITHM`, `JWT_EXPIRATION_MINUTES`); ver `src/orderhub/settings.py`.
 
@@ -247,6 +263,13 @@ Variables de entorno (ver `.env.example`):
 | `PORT` | No | Puerto. Por defecto 5001; las plataformas PaaS lo definen solas. |
 | `APP_HOST` | No | Host. Con gunicorn vale `0.0.0.0` por defecto; con `python app.py`, `127.0.0.1`. Con `APP_DEBUG` solo se admite loopback. |
 | `DATABASE_PATH` | No | Ruta del fichero SQLite (por defecto `orderhub.db`). |
+| `RATE_LIMIT_ENABLED` | No | Interruptor del límite de peticiones. Vacío = activado; `0`, `false`, `no` u `off` lo apagan. |
+| `RATE_LIMIT_LOGIN_MAX`, `RATE_LIMIT_LOGIN_WINDOW` | No | `POST /login`: peticiones por IP y ventana en segundos. Por defecto 30 / 60. |
+| `RATE_LIMIT_USERS_MAX`, `RATE_LIMIT_USERS_WINDOW` | No | `POST /users`: peticiones por usuario autenticado (`user_id` del token). Por defecto 30 / 60. |
+| `RATE_LIMIT_GLOBAL_MAX`, `RATE_LIMIT_GLOBAL_WINDOW` | No | Límite global suave por IP; no cuenta `/` ni `/static/*`. Por defecto 300 / 60. |
+| `TRUSTED_PROXY_HOPS` | No | Proxies de confianza delante de la app. Por defecto 0: `X-Forwarded-For` se ignora. Con N > 0 se aplica `ProxyFix(x_for=N)`. |
+
+**Límite de peticiones (rate limit).** Al superarlo, la API responde `429` con `{"status":"error","message":"Demasiadas peticiones. Intenta de nuevo en N s"}` y la cabecera `Retry-After`. Los contadores viven en memoria del proceso (se pierden al reiniciar o dormirse el servicio y solo valen con un worker, [DT-23](docs/TECHNICAL_DEBT_LOG.md)). Los valores por defecto son holgados para que una demo en clase no se bloquee. El código vive en el adaptador de entrada: `rate_limiter.py` (el limitador, sin Flask) y `rate_limiting.py` (la parte HTTP).
 
 Fuera de `development` **no se siembran** `admin`/`juan` ni los productos de demostración (DT-15): el catálogo empieza vacío y el administrador lo llena con `POST /products`.
 
@@ -280,17 +303,28 @@ La plataforma de despliegue es **Render** (plan gratuito, *Web Service*). No hay
 * **Start Command:** Render inyecta `GUNICORN_CMD_ARGS="--preload --access-logfile - --bind=0.0.0.0:10000"`. Con `--preload`, gunicorn importa la app en el proceso maestro antes de lanzar el worker, y en las pruebas locales en macOS (Python 3.9) el worker terminó con `SIGSEGV` en el primer login. Anteponer `GUNICORN_CMD_ARGS="--access-logfile -"` sustituye ese valor y quita `--preload`, y funcionó. En Linux no se probó si `--preload` falla: si lo sustituyes por otro valor y todo va bien, no pierdes nada.
 * **Health Check Path `/`:** devuelve la página de la interfaz (200) sin tocar la base de datos. No existe un `/health` dedicado.
 
+**Verificar `TRUSTED_PROXY_HOPS` en Render.** Detrás del proxy de Render, `request.remote_addr` es la IP del proxy: sin `TRUSTED_PROXY_HOPS` todos los clientes compartirían contador. El valor correcto depende de cuántos proxies hay delante y **no está verificado**; uno mayor que el real permite falsificar la IP con `X-Forwarded-For`. Para comprobarlo:
+
+1. Fija temporalmente en Render `RATE_LIMIT_LOGIN_MAX=3` y `TRUSTED_PROXY_HOPS=1`.
+2. Desde una red (por ejemplo tu wifi) haz 4 intentos de login fallidos: el cuarto debe dar `429`.
+3. Desde **otra red distinta** (por ejemplo los datos del móvil) intenta un login. Debe responder `401` (credenciales inválidas), no `429`.
+4. Si desde la otra red también da `429`, el recuento es incorrecto (todos comparten la IP del proxy): prueba con otro valor (`2`) y repite.
+5. Vuelve a dejar `RATE_LIMIT_LOGIN_MAX` vacío (o en 30) cuando termines.
+
 **Advertencias del plan gratuito**
 
-* **Disco efímero.** Los cambios en disco se pierden en cada despliegue, reinicio **y cuando el servicio se duerme** (el plan gratuito no admite discos persistentes). Como la base es un fichero SQLite, usuarios, productos y órdenes se pierden en cada uno de esos eventos. El administrador se recrea solo desde `ADMIN_*`; el catálogo y las órdenes, no (DT-21).
+* **Disco efímero.** Los cambios en disco se pierden en cada despliegue, reinicio **y cuando el servicio se duerme** (el plan gratuito no admite discos persistentes). Como la base es un fichero SQLite, usuarios (**incluidos los creados con `POST /users`**), productos y órdenes se pierden en cada uno de esos eventos. El administrador se recrea solo desde `ADMIN_*`; el catálogo y las órdenes, no (DT-21).
 * **Se duerme tras 15 minutos sin tráfico**, y la primera petición posterior tarda en torno a un minuto. Tiene un tope de 750 horas de instancia al mes.
 * **Sin `ADMIN_*` no hay ningún usuario**: la app arranca igual, pero nadie puede iniciar sesión.
 
 **Usar la interfaz web:** abre http://127.0.0.1:5001/ , inicia sesión con el usuario de prueba del seed (`admin` o `juan`; sus contraseñas de demostración están en `database.py` y en la sección de ejemplos de `curl` de este README, nunca en la UI) y verás tu usuario, rol y hasta cuándo es válida la sesión. «Cerrar sesión» borra el token en el navegador; el servidor no revoca tokens.
 
+**Crear usuarios desde la interfaz:** si inicias sesión con un usuario `admin`, aparece el formulario «Crear usuario» (usuario, contraseña y la casilla «Usuario administrador»: marcada crea un `admin`, sin marcar un `client`). Con un `client` el formulario no se muestra. Los errores del servidor (validación, duplicado `409`, límite `429`) se muestran en el propio formulario y **no** cierran la sesión; solo un `401` lo hace.
+
 **Usar el explorador de API:** tras el login aparece la lista de endpoints (método + ruta). Despliega uno, edita el body JSON si lo tiene y pulsa «Enviar»: verás el código HTTP, el tiempo en ms y la respuesta formateada.
 
 * El token de la sesión se envía solo en los endpoints protegidos. Nunca se muestra: en la respuesta de `POST /login` el campo `token` aparece como `[oculto]`.
+* El explorador solo lista los endpoints cuyo `role` coincide con el de la sesión (un `client` no ve `POST /products` ni `POST /users`). Es solo comodidad: para comprobar un `403` usa `curl` con el token de un `client`.
 * La casilla «Enviar sin token» permite comprobar el `401`. Un `401` con token vigente se trata como sesión expirada y vuelve al login; un `403` o un error de red no cierran la sesión.
 * La lista de endpoints vive en [`static/endpoints.json`](static/endpoints.json). Al añadir o cambiar un endpoint hay que actualizarla; `tests/integration/test_api_explorer_catalog.py` falla si se desincroniza de las rutas de Flask.
 
@@ -316,7 +350,7 @@ Con reporte de cobertura:
 pytest --cov=orderhub --cov-report=term-missing
 ```
 
-La suite tiene **516 tests** organizados por capa: `tests/unit/domain/`, `tests/unit/application/`, `tests/unit/adapters/`, `tests/unit/security/` y `tests/integration/`. Los tests de integración usan Flask y SQLite reales, cada uno contra una base temporal aislada — nunca tocan `orderhub.db`.
+La suite tiene **757 tests** (540 unitarios y 217 de integración) organizados por capa: `tests/unit/domain/`, `tests/unit/application/`, `tests/unit/adapters/`, `tests/unit/security/` y `tests/integration/`. Los tests de integración usan Flask y SQLite reales, cada uno contra una base temporal aislada — nunca tocan `orderhub.db`.
 
 `tests/unit/security/` contiene dos **guardas estáticas** que analizan el propio repositorio en cada ejecución: una falla si alguna consulta SQL se construye por concatenación en lugar de con parámetros (RNF-02.2), y la otra si reaparece un secreto en el código fuente o si `.env` deja de estar ignorado (RNF-02.1).
 

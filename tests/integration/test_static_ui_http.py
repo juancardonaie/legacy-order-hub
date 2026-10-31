@@ -51,7 +51,7 @@ def test_el_catalogo_del_explorador_se_sirve_como_json_valido(http):
     catalogo = response.get_json()
     response.close()
     assert isinstance(catalogo, list)
-    assert len(catalogo) == 5
+    assert len(catalogo) == 6
 
 
 def test_la_api_sigue_protegida_aunque_la_ui_sea_publica(http):
